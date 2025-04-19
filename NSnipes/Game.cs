@@ -45,7 +45,7 @@ public class Game : Window
 
         // draw the player
         var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
-        var mouth = "◄►";
+        var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
         var initials = "BD";
 
         Application.Driver!.SetAttribute(ColorScheme!.Focus);
@@ -53,6 +53,7 @@ public class Game : Window
         Application.Driver!.AddStr(eyes);
         Application.Driver!.Move(frameWidth / 2 - 1, currentHeight/2);
         Application.Driver!.AddStr(mouth);
+        Application.Driver!.SetAttribute(ColorScheme!.Normal);
         Application.Driver!.Move(frameWidth / 2 - 1, currentHeight/2+1);
         Application.Driver!.AddStr(initials);
 
