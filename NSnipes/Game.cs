@@ -4,49 +4,73 @@ namespace NSnipes;
 
 public class Game : Window
 {
-    private List<Label> _rows = [];
     private readonly Map _map;
+    private readonly Player _player;
+
     public Game()
     {
-         _map = new Map();
+        _map = new Map();
+        _player = new Player(75, 50);
         Title = "NSnipes";
 
         ColorScheme = new ColorScheme()
         {
-           Normal = new Terminal.Gui.Attribute(Color.Gray, Color.Black),
+            Normal = new Terminal.Gui.Attribute(Color.Gray, Color.Black),
             Focus = new Terminal.Gui.Attribute(Color.White, Color.Black),
             Disabled = new Terminal.Gui.Attribute(Color.Blue, Color.Black),
 
         };
 
+        Application.AddTimeout(TimeSpan.FromMilliseconds(20), DrawFrame);
+        Application.KeyDown += HandleKeyDown;
         Application.SizeChanging += (s, e) =>
         {
-             DrawFrame();
+            DrawFrame();
         };
-        Application.AddTimeout(TimeSpan.FromMilliseconds(50), DrawFrame);
-        DrawFrame();
 
+        DrawFrame();
     }
 
+    private void HandleKeyDown(object? sender, Key e)
+    {
+        switch (e.KeyCode)
+        {
+            case KeyCode.CursorRight:
+                _player.X++;
+                break;
+            case KeyCode.CursorLeft:
+                _player.X--;
+                break;
+            case KeyCode.CursorUp:
+                _player.Y--;
+                break;
+            case KeyCode.CursorDown:
+                _player.Y++;
+                break;
+        }
+    }
 
     private bool DrawFrame()
     {
         int currentWidth = Application.Driver!.Cols;
         int currentHeight = Application.Driver!.Rows;
         int frameWidth = currentWidth - 2;
+        int frameHeight = currentHeight - 2;
+
+        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
 
         Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+
         // draw the maze
-        for (int r = 1; r < currentHeight - 1; r++)
+        for (int r = 0; r < frameHeight; r++)
         {
-            Application.Driver!.Move(1, r);
-            Application.Driver!.AddStr(_map.FullMap[r].Substring(0, frameWidth));
+            Application.Driver!.Move(1, r+1);
+            Application.Driver!.AddStr(map[r]);  
         }
 
         // draw the player
         var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
         var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
-        var initials = "BD";
 
         Application.Driver!.SetAttribute(ColorScheme!.Focus);
         Application.Driver!.Move(frameWidth/2-1, currentHeight/2-1);
@@ -55,8 +79,7 @@ public class Game : Window
         Application.Driver!.AddStr(mouth);
         Application.Driver!.SetAttribute(ColorScheme!.Normal);
         Application.Driver!.Move(frameWidth / 2 - 1, currentHeight/2+1);
-        Application.Driver!.AddStr(initials);
-
+        Application.Driver!.AddStr(_player.Initials);
 
         return true;
     }

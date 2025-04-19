@@ -140,4 +140,17 @@ public class Map
   
     }
 
+    public string[] GetMap(int frameWidth, int frameHeight, int x, int y)
+    {
+        string[] rows = new string[frameHeight];
+        int mapRow = y - (frameHeight / 2);
+        int mapCol = x - (frameWidth / 2);
+
+        for (int r = 0; r < frameHeight; r++)
+        {
+            rows[r] = FullMap[mapRow++].Substring(mapCol, frameWidth);
+        }
+
+        return rows;
+    }
 }
