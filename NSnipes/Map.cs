@@ -6,7 +6,7 @@ public class Map
 {
     private readonly string[] _map = new string[]
     {
-"                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
+"TOP LEFT                                                                                                                                              ║                             ║                                                                                         ║                                                                                              TOP RIGHT  ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
@@ -126,13 +126,15 @@ public class Map
 "               ║                                            ║              ║                                                           ║              ║                                            ║                             ║                             ║              ║                                            ║              ║                                             ",
 "               ║                                            ║              ║                                                           ║              ║                                            ║                             ║                             ║              ║                                            ║              ║                                             ",
 "               ║              ══════════════════════════════╝              ╚═══════════════════════════════════════════════════════════╣              ║              ║              ═══════════════╝              ║              ╚═════════════════════════════╝              ║              ║              ═══════════════╝              ║              ╔═══════════════               ",
+"LEFT           ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              ",
 "               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              ",
 "               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              ",
-"               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              ",
-"               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              "
+"BOTTOM         ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                bottom right ."
     };
 
     public string[] FullMap => _map;
+    public int MapWidth => _map[0].Length;
+    public int MapHeight => _map.Length;
 
     public Map()
     {
@@ -143,12 +145,30 @@ public class Map
     public string[] GetMap(int frameWidth, int frameHeight, int x, int y)
     {
         string[] rows = new string[frameHeight];
-        int mapRow = y - (frameHeight / 2);
+        int mapRow = (y - (frameHeight / 2) + FullMap.Length) % FullMap.Length;
         int mapCol = x - (frameWidth / 2);
 
         for (int r = 0; r < frameHeight; r++)
         {
-            rows[r] = FullMap[mapRow++].Substring(mapCol, frameWidth);
+            string fullRow = FullMap[mapRow];
+            int rowLength = fullRow.Length;
+
+            // Handle negative mapCol by wrapping around from the right  
+            int startCol = (mapCol % rowLength + rowLength) % rowLength;
+
+            // Construct the row by taking from the right and wrapping to the left if needed  
+            if (startCol + frameWidth <= rowLength)
+            {
+                rows[r] = fullRow.Substring(startCol, frameWidth);
+            }
+            else
+            {
+                int rightPartLength = rowLength - startCol;
+                rows[r] = fullRow.Substring(startCol, rightPartLength) + fullRow.Substring(0, frameWidth - rightPartLength);
+            }
+
+            // Increment mapRow and wrap around if it exceeds the length of FullMap  
+            mapRow = (mapRow + 1) % FullMap.Length;
         }
 
         return rows;

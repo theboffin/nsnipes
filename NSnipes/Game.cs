@@ -37,15 +37,23 @@ public class Game : Window
         {
             case KeyCode.CursorRight:
                 _player.X++;
+                if (_player.X > _map.MapWidth)
+                    _player.X = 0;
                 break;
             case KeyCode.CursorLeft:
                 _player.X--;
+                if (_player.X < 0)
+                    _player.X = _map.MapWidth;
                 break;
             case KeyCode.CursorUp:
                 _player.Y--;
+                if (_player.Y < 0)
+                    _player.Y = _map.MapHeight;
                 break;
             case KeyCode.CursorDown:
                 _player.Y++;
+                if (_player.Y > _map.MapHeight)
+                    _player.Y = 0;
                 break;
         }
     }
