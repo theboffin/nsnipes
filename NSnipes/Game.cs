@@ -33,27 +33,41 @@ public class Game : Window
 
     private void HandleKeyDown(object? sender, Key e)
     {
+        var map = _map.GetMap(7, 7, _player.X, _player.Y);
+
         switch (e.KeyCode)
         {
             case KeyCode.CursorRight:
-                _player.X++;
-                if (_player.X > _map.MapWidth)
-                    _player.X = 0;
+                if (map?[4][3] == ' ')
+                {
+                    _player.X++;
+                    if (_player.X > _map.MapWidth)
+                        _player.X = 0;
+                }
                 break;
             case KeyCode.CursorLeft:
-                _player.X--;
-                if (_player.X < 0)
-                    _player.X = _map.MapWidth;
+                if (map?[4][0] == ' ')
+                {
+                    _player.X--;
+                    if (_player.X < 0)
+                        _player.X = _map.MapWidth;
+                }
                 break;
             case KeyCode.CursorUp:
-                _player.Y--;
-                if (_player.Y < 0)
-                    _player.Y = _map.MapHeight;
+                if (map?[1][1] == ' ')
+                {
+                    _player.Y--;
+                    if (_player.Y < 0)
+                        _player.Y = _map.MapHeight;
+                }
                 break;
             case KeyCode.CursorDown:
-                _player.Y++;
-                if (_player.Y > _map.MapHeight)
-                    _player.Y = 0;
+                if (map?[5][1] == ' ')
+                {
+                    _player.Y++;
+                    if (_player.Y > _map.MapHeight)
+                        _player.Y = 0;
+                }
                 break;
         }
     }

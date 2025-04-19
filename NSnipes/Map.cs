@@ -156,22 +156,15 @@ public class Map
             // Handle negative mapCol by wrapping around from the right  
             int startCol = (mapCol % rowLength + rowLength) % rowLength;
 
-            char[] chars;
             // Construct the row by taking from the right and wrapping to the left if needed  
             if (startCol + frameWidth <= rowLength)
             {
-                chars = new char[frameWidth];
-                fullRow.CopyTo(startCol, chars, 0, frameWidth);
-                rows[r] = new string(chars);
+                rows[r] = fullRow.AsSpan(startCol, frameWidth).ToString();//.Substring(startCol, frameWidth);
             }
             else
             {
                 int rightPartLength = rowLength - startCol;
-                chars = new char[rightPartLength];
-                fullRow.CopyTo(startCol, chars, 0, rightPartLength);
-                char[] charsRight = new char[frameWidth - rightPartLength];
-                fullRow.CopyTo(0, charsRight, 0, frameWidth - rightPartLength);
-                rows[r] = new string(chars) + new string(charsRight);
+                rows[r] = fullRow.AsSpan(startCol, rightPartLength).ToString() + fullRow.AsSpan(0, frameWidth - rightPartLength).ToString();
             }
 
             // Increment mapRow and wrap around if it exceeds the length of FullMap  
