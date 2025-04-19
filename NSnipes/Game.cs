@@ -21,7 +21,7 @@ public class Game : Window
 
         };
 
-        Application.AddTimeout(TimeSpan.FromMilliseconds(20), DrawFrame);
+        Application.AddTimeout(TimeSpan.FromMilliseconds(50), DrawFrame);
         Application.KeyDown += HandleKeyDown;
         Application.SizeChanging += (s, e) =>
         {
