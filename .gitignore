@@ -5,3 +5,6 @@
 /.vs/*
 /NSnipes/bin/Debug/net9.0
 /NSnipes/obj
+/NSnipes/.DS_Store
+/NSnipes/bin/*
+.DS_Store
