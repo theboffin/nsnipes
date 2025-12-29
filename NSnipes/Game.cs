@@ -9,6 +9,9 @@ public class Game : Window
     private int _lastFrameWidth;
     private int _lastFrameHeight;
     private bool _mapDrawn = false;
+    private readonly List<Bullet> _bullets = new List<Bullet>();
+    private const int MaxBullets = 10;
+    private const double BulletSpeed = 1.0; // Bullets move 1.0 cell per update (10ms) to ensure proper wall collision
 
     public Game()
     {
@@ -43,7 +46,7 @@ public class Game : Window
             DrawMapAndPlayer();
         };
 
-        // Timer is for animating the player (eyes / mouth), and initial map draw
+        // Timer for player animation and initial map draw (100ms)
         Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
         {
             if (!_mapDrawn)
@@ -54,6 +57,17 @@ public class Game : Window
             else
             {
                 DrawPlayer();
+            }
+            return true;
+        });
+
+        // Separate timer for bullet updates (10ms for smooth movement)
+        Application.AddTimeout(TimeSpan.FromMilliseconds(10), () =>
+        {
+            if (_mapDrawn)
+            {
+                UpdateBullets();
+                DrawFrame();
             }
             return true;
         });
@@ -205,6 +219,74 @@ public class Game : Window
                 break;
         }
 
+        // Handle bullet firing (q, w, e, a, d, z, x, c)
+        // Player is 2 columns wide [X, X+1] and 3 rows tall [Y, Y+1, Y+2]
+        if (_bullets.Count < MaxBullets)
+        {
+            double startX = 0;
+            double startY = 0;
+            double velX = 0;
+            double velY = 0;
+
+            switch (e.KeyCode)
+            {
+                case KeyCode.Q: // Diagonal left/up - fire from top-left corner
+                    startX = _player.X;
+                    startY = _player.Y;
+                    velX = -BulletSpeed;
+                    velY = -BulletSpeed;
+                    break;
+                case KeyCode.W: // Up - fire from top center
+                    startX = _player.X + 0.5;
+                    startY = _player.Y;
+                    velY = -BulletSpeed;
+                    break;
+                case KeyCode.E: // Diagonal right/up - fire from top-right corner
+                    startX = _player.X + 1.0;
+                    startY = _player.Y;
+                    velX = BulletSpeed;
+                    velY = -BulletSpeed;
+                    break;
+                case KeyCode.A: // Left - fire from left center
+                    startX = _player.X;
+                    startY = _player.Y + 1.0;
+                    velX = -BulletSpeed;
+                    break;
+                case KeyCode.D: // Right - fire from right center
+                    startX = _player.X + 1.0;
+                    startY = _player.Y + 1.0;
+                    velX = BulletSpeed;
+                    break;
+                case KeyCode.Z: // Diagonal left/down - fire from bottom-left corner
+                    startX = _player.X;
+                    startY = _player.Y + 2.0;
+                    velX = -BulletSpeed;
+                    velY = BulletSpeed;
+                    break;
+                case KeyCode.X: // Down - fire from bottom center
+                    startX = _player.X + 0.5;
+                    startY = _player.Y + 2.0;
+                    velY = BulletSpeed;
+                    break;
+                case KeyCode.C: // Diagonal right/down - fire from bottom-right corner
+                    startX = _player.X + 1.0;
+                    startY = _player.Y + 2.0;
+                    velX = BulletSpeed;
+                    velY = BulletSpeed;
+                    break;
+            }
+
+            if (velX != 0 || velY != 0)
+            {
+                _bullets.Add(new Bullet(startX, startY, velX, velY));
+                // Redraw to show the new bullet
+                if (_mapDrawn)
+                {
+                    DrawFrame();
+                }
+            }
+        }
+
         // Only redraw if movement occurred
         if (moved)
         {
@@ -242,7 +324,189 @@ public class Game : Window
         }
 
         DrawPlayer();
+        DrawBullets();
         _mapDrawn = true; // Mark that map has been drawn
+    }
+
+    private void DrawFrame()
+    {
+        DrawPlayer();
+        DrawBullets();
+    }
+
+    private void UpdateBullets()
+    {
+        int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
+        int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : Application.Driver!.Rows;
+        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+        int mapOffsetX = _player.X - (frameWidth / 2);
+        int mapOffsetY = _player.Y - (frameHeight / 2);
+
+        for (int i = _bullets.Count - 1; i >= 0; i--)
+        {
+            var bullet = _bullets[i];
+            
+            // Check if bullet has expired (older than 2 seconds)
+            double ageSeconds = (DateTime.Now - bullet.CreatedAt).TotalSeconds;
+            if (ageSeconds >= Bullet.LifetimeSeconds)
+            {
+                // Clear the expired bullet from screen before removing
+                int viewportX = (int)Math.Round(bullet.X) - mapOffsetX;
+                int viewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
+                
+                if (viewportX >= 0 && viewportX < frameWidth && 
+                    viewportY >= 0 && viewportY < frameHeight &&
+                    map != null && viewportY >= 0 && viewportY < map.Length &&
+                    viewportX >= 0 && viewportX < map[viewportY].Length)
+                {
+                    Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                    Application.Driver.Move(viewportX, viewportY);
+                    Application.Driver.AddRune(map[viewportY][viewportX]);
+                    Application.Driver.SetAttribute(ColorScheme!.Normal);
+                }
+                
+                _bullets.RemoveAt(i);
+                continue;
+            }
+            
+            // Store previous position
+            double prevX = bullet.X;
+            double prevY = bullet.Y;
+            
+            // Update bullet position (moves every 10ms when this is called)
+            bullet.Update();
+
+            // Check for wall collision using world map coordinates
+            int bulletMapX = (int)Math.Round(bullet.X);
+            int bulletMapY = (int)Math.Round(bullet.Y);
+
+            // Wrap coordinates to map bounds
+            bulletMapX = (bulletMapX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+            bulletMapY = (bulletMapY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+
+            // Check if bullet hit a wall
+            if (bulletMapY >= 0 && bulletMapY < _map.MapHeight &&
+                bulletMapX >= 0 && bulletMapX < _map.MapWidth)
+            {
+                char cell = _map.FullMap[bulletMapY][bulletMapX];
+                if (cell != ' ')
+                {
+                    // Hit a wall - determine wall type and bounce accordingly
+                    // Horizontal walls: ═, ─, ╦, ╩, ╬ (reverse Y)
+                    // Vertical walls: ║, │, ╣, ╠ (reverse X)
+                    // Corners: ╗, ╝, ╚, ╔ (determine based on approach direction)
+                    
+                    bool isHorizontalWall = cell == '═' || cell == '─' || cell == '╦' || cell == '╩' || cell == '╬';
+                    bool isVerticalWall = cell == '║' || cell == '│' || cell == '╣' || cell == '╠';
+                    
+                    if (isHorizontalWall)
+                    {
+                        // Hit a horizontal wall - reverse Y direction
+                        bullet.BounceY();
+                    }
+                    else if (isVerticalWall)
+                    {
+                        // Hit a vertical wall - reverse X direction
+                        bullet.BounceX();
+                    }
+                    else
+                    {
+                        // Corner or other wall character - determine based on approach direction
+                        // If moving more horizontally, likely hit vertical surface, reverse X
+                        // If moving more vertically, likely hit horizontal surface, reverse Y
+                        if (Math.Abs(bullet.VelocityX) > Math.Abs(bullet.VelocityY))
+                        {
+                            bullet.BounceX();
+                        }
+                        else if (Math.Abs(bullet.VelocityY) > Math.Abs(bullet.VelocityX))
+                        {
+                            bullet.BounceY();
+                        }
+                        else
+                        {
+                            // Equal diagonal - reverse both
+                            bullet.BounceX();
+                            bullet.BounceY();
+                        }
+                    }
+
+                    // Move bullet back to previous position to avoid getting stuck
+                    bullet.X = prevX;
+                    bullet.Y = prevY;
+                }
+            }
+        }
+    }
+
+    private void DrawBullets()
+    {
+        if (Application.Driver == null)
+            return;
+
+        int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver.Cols;
+        int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : Application.Driver.Rows;
+
+        // Get current map viewport for clearing previous positions
+        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+
+        // Get map viewport to convert world coordinates to viewport coordinates
+        // Map.GetMap centers on (_player.X, _player.Y), so:
+        // viewport center = (frameWidth/2, frameHeight/2) corresponds to (_player.X, _player.Y)
+        int mapOffsetX = _player.X - (frameWidth / 2);
+        int mapOffsetY = _player.Y - (frameHeight / 2);
+
+        // First, clear previous bullet positions by drawing the map character there
+        Application.Driver.SetAttribute(ColorScheme!.Disabled);
+        foreach (var bullet in _bullets)
+        {
+            // Convert previous world coordinates to viewport coordinates
+            int prevViewportX = (int)Math.Round(bullet.PreviousX) - mapOffsetX;
+            int prevViewportY = (int)Math.Round(bullet.PreviousY) - mapOffsetY;
+
+            // Only clear if within viewport and different from current position
+            if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                prevViewportY >= 0 && prevViewportY < frameHeight)
+            {
+                int currentViewportX = (int)Math.Round(bullet.X) - mapOffsetX;
+                int currentViewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
+                
+                // Only clear if position actually changed
+                if (prevViewportX != currentViewportX || prevViewportY != currentViewportY)
+                {
+                    // Get the map character at the previous position
+                    if (map != null && prevViewportY >= 0 && prevViewportY < map.Length &&
+                        prevViewportX >= 0 && prevViewportX < map[prevViewportY].Length)
+                    {
+                        char mapChar = map[prevViewportY][prevViewportX];
+                        Application.Driver.Move(prevViewportX, prevViewportY);
+                        Application.Driver.AddRune(mapChar);
+                    }
+                }
+            }
+        }
+
+        // Flash between bright red and red based on time
+        bool isBright = (DateTime.Now.Millisecond / 250) % 2 == 0;
+        var bulletColor = isBright ? Color.BrightRed : Color.Red;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(bulletColor, Color.Black));
+
+        // Now draw bullets at their current positions
+        foreach (var bullet in _bullets)
+        {
+            // Convert world coordinates to viewport coordinates
+            int viewportX = (int)Math.Round(bullet.X) - mapOffsetX;
+            int viewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
+
+            // Only draw if within viewport
+            if (viewportX >= 0 && viewportX < frameWidth && 
+                viewportY >= 0 && viewportY < frameHeight)
+            {
+                Application.Driver.Move(viewportX, viewportY);
+                Application.Driver.AddRune('*');
+            }
+        }
+
+        Application.Driver.SetAttribute(ColorScheme!.Normal);
     }
 
     private (int x, int y) FindRandomValidPosition()
