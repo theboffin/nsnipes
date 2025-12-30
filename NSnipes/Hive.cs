@@ -7,6 +7,7 @@ public class Hive
     public bool IsDestroyed { get; set; } = false;
     public int Hits { get; set; } = 0; // Number of times hit by bullets
     public const int HitsToDestroy = 3; // Hive destroyed after 3 hits
+    public int FlashIntervalMs { get; set; } = 75; // Flash interval in milliseconds (reduced by 1/3 each hit)
     public int SnipesRemaining { get; set; }
     public int SnipesType2 { get; set; } // chr(2) snipes
     public int SnipesType3 { get; set; } // chr(3) snipes

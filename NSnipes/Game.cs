@@ -17,6 +17,19 @@ public class Game : Window
     private const double BulletSpeed = 1.0; // Bullets move 1.0 cell per update (10ms) to ensure proper wall collision
     private const int StatusBarHeight = 2; // First 2 rows reserved for status information
     private Random _random = new Random();
+    
+    // Performance optimization: Track previous positions to avoid unnecessary redraws
+    private int _previousPlayerCellX = -1;
+    private int _previousPlayerCellY = -1;
+    private int _previousPlayerViewportX = -1;
+    private int _previousPlayerViewportY = -1;
+    private string[]? _cachedMapViewport = null;
+    private DateTime _cachedDateTime = DateTime.MinValue;
+    private int _cachedHivesUndestroyed = -1;
+    private int _cachedSnipesUndestroyed = -1;
+    private int _cachedLives = -1;
+    private int _cachedLevel = -1;
+    private int _cachedScore = -1;
 
     public Game()
     {
@@ -322,7 +335,24 @@ public class Game : Window
         // Only redraw if movement occurred
         if (moved)
         {
-            DrawMapAndPlayer();
+            // Performance optimization: Only redraw map if player moved to a different cell
+            int currentCellX = _player.X;
+            int currentCellY = _player.Y;
+            
+            if (_previousPlayerCellX != currentCellX || _previousPlayerCellY != currentCellY || !_mapDrawn)
+            {
+                // Player moved to a different cell - invalidate cache and redraw entire map
+                _cachedMapViewport = null;
+                DrawMapAndPlayer();
+                _previousPlayerCellX = currentCellX;
+                _previousPlayerCellY = currentCellY;
+            }
+            else
+            {
+                // Player is still in same cell - just update player and dynamic elements
+                DrawPlayerWithClearing();
+                DrawBullets();
+            }
         }
     }
 
@@ -345,6 +375,9 @@ public class Game : Window
         _lastFrameHeight = frameHeight;
 
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+        
+        // Cache map viewport for reuse in other drawing functions
+        _cachedMapViewport = map;
 
         // Draw status bar first
         DrawStatusBar();
@@ -363,13 +396,60 @@ public class Game : Window
         DrawHives();
         DrawSnipes();
         _mapDrawn = true; // Mark that map has been drawn
+        
+        // Update previous player viewport position
+        _previousPlayerViewportX = frameWidth / 2;
+        _previousPlayerViewportY = frameHeight / 2;
     }
 
     private void DrawFrame()
     {
-        DrawPlayer();
+        DrawPlayerWithClearing();
         DrawBullets();
         // Hives and snipes are drawn on their own timers for better performance
+    }
+    
+    private void DrawPlayerWithClearing()
+    {
+        // Clear previous player position before drawing new position
+        if (_previousPlayerViewportX >= 0 && _previousPlayerViewportY >= 0 && _cachedMapViewport != null)
+        {
+            int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
+            int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
+            
+            if (_previousPlayerViewportX < frameWidth && _previousPlayerViewportY < frameHeight &&
+                _previousPlayerViewportY >= 0 && _previousPlayerViewportY < _cachedMapViewport.Length &&
+                _previousPlayerViewportX >= 0 && _previousPlayerViewportX < _cachedMapViewport[_previousPlayerViewportY].Length)
+            {
+                Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                // Clear all 6 cells of player (2x3)
+                for (int row = 0; row < 3; row++)
+                {
+                    for (int col = 0; col < 2; col++)
+                    {
+                        int clearX = _previousPlayerViewportX + col;
+                        int clearY = _previousPlayerViewportY + row;
+                        if (clearX < frameWidth && clearY < frameHeight &&
+                            clearY >= 0 && clearY < _cachedMapViewport.Length &&
+                            clearX >= 0 && clearX < _cachedMapViewport[clearY].Length)
+                        {
+                            char mapChar = _cachedMapViewport[clearY][clearX];
+                            Application.Driver.Move(clearX, clearY + StatusBarHeight);
+                            Application.Driver.AddRune(mapChar);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Draw player at new position
+        DrawPlayer();
+        
+        // Update previous viewport position
+        int frameWidth2 = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
+        int frameHeight2 = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
+        _previousPlayerViewportX = frameWidth2 / 2;
+        _previousPlayerViewportY = frameHeight2 / 2;
     }
 
     private void UpdateBullets()
@@ -500,24 +580,52 @@ public class Game : Window
                     // Bullet hit snipe - clear both bullet and snipe
                     snipe.IsAlive = false;
                     
-                    // Clear bullet first (at collision point)
+                    // Get fresh map to ensure we have correct character for clearing
+                    var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+                    
+                    // Clear snipe first (both '@' and arrow) - uses world coordinates
+                    ClearSnipePosition(snipe);
+                    
+                    // Clear bullet at collision point (use bullet's current position)
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
                     if (viewportX >= 0 && viewportX < frameWidth && 
                         viewportY >= 0 && viewportY < frameHeight &&
-                        map != null && viewportY >= 0 && viewportY < map.Length &&
-                        viewportX >= 0 && viewportX < map[viewportY].Length)
+                        freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
+                        viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                     {
                         Application.Driver!.SetAttribute(ColorScheme!.Disabled);
                         Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(map[viewportY][viewportX]);
+                        Application.Driver.AddRune(freshMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(ColorScheme!.Normal);
                     }
                     
-                    // Clear snipe (both '@' and arrow)
-                    ClearSnipePosition(snipe);
+                    // Also clear bullet's previous position if different
+                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                    prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                    prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
                     
-                    // Remove from lists
+                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                    {
+                        int prevViewportX = prevBulletWorldX - mapOffsetX;
+                        int prevViewportY = prevBulletWorldY - mapOffsetY;
+                        if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                            prevViewportY >= 0 && prevViewportY < frameHeight &&
+                            freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
+                            prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
+                        {
+                            Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                            Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
+                            Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
+                            Application.Driver.SetAttribute(ColorScheme!.Normal);
+                        }
+                    }
+                    
+                    // Invalidate cached map since we're removing entities
+                    _cachedMapViewport = null;
+                    
+                    // Remove from lists AFTER clearing
                     _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
                     _gameState.SnipesUndestroyed--;
@@ -535,24 +643,52 @@ public class Game : Window
                     // Bullet hit snipe arrow - clear both bullet and snipe
                     snipe.IsAlive = false;
                     
-                    // Clear bullet first (at collision point)
+                    // Get fresh map to ensure we have correct character for clearing
+                    var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+                    
+                    // Clear snipe first (both '@' and arrow) - uses world coordinates
+                    ClearSnipePosition(snipe);
+                    
+                    // Clear bullet at collision point
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
                     if (viewportX >= 0 && viewportX < frameWidth && 
                         viewportY >= 0 && viewportY < frameHeight &&
-                        map != null && viewportY >= 0 && viewportY < map.Length &&
-                        viewportX >= 0 && viewportX < map[viewportY].Length)
+                        freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
+                        viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                     {
                         Application.Driver!.SetAttribute(ColorScheme!.Disabled);
                         Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(map[viewportY][viewportX]);
+                        Application.Driver.AddRune(freshMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(ColorScheme!.Normal);
                     }
                     
-                    // Clear snipe (both '@' and arrow)
-                    ClearSnipePosition(snipe);
+                    // Also clear bullet's previous position if different
+                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                    prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                    prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
                     
-                    // Remove from lists
+                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                    {
+                        int prevViewportX = prevBulletWorldX - mapOffsetX;
+                        int prevViewportY = prevBulletWorldY - mapOffsetY;
+                        if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                            prevViewportY >= 0 && prevViewportY < frameHeight &&
+                            freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
+                            prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
+                        {
+                            Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                            Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
+                            Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
+                            Application.Driver.SetAttribute(ColorScheme!.Normal);
+                        }
+                    }
+                    
+                    // Invalidate cached map since we're removing entities
+                    _cachedMapViewport = null;
+                    
+                    // Remove from lists AFTER clearing
                     _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
                     _gameState.SnipesUndestroyed--;
@@ -592,19 +728,52 @@ public class Game : Window
                         // Bullet hit hive
                         hive.Hits++;
                         
-                        // Remove bullet
+                        // Reduce flash rate by 1/3 (for this hive only)
+                        hive.FlashIntervalMs = (int)(hive.FlashIntervalMs * 2.0 / 3.0);
+                        if (hive.FlashIntervalMs < 10) hive.FlashIntervalMs = 10; // Minimum 10ms
+                        
+                        // Get fresh map to ensure we have correct character for clearing
+                        var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+                        
+                        // Clear bullet at collision point
                         int viewportX = bulletWorldX - mapOffsetX;
                         int viewportY = bulletWorldY - mapOffsetY;
                         if (viewportX >= 0 && viewportX < frameWidth && 
                             viewportY >= 0 && viewportY < frameHeight &&
-                            map != null && viewportY >= 0 && viewportY < map.Length &&
-                            viewportX >= 0 && viewportX < map[viewportY].Length)
+                            freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
+                            viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                         {
                             Application.Driver!.SetAttribute(ColorScheme!.Disabled);
                             Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                            Application.Driver.AddRune(map[viewportY][viewportX]);
+                            Application.Driver.AddRune(freshMap[viewportY][viewportX]);
                             Application.Driver.SetAttribute(ColorScheme!.Normal);
                         }
+                        
+                        // Also clear bullet's previous position if different
+                        int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                        int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                        prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                        prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                        
+                        if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                        {
+                            int prevViewportX = prevBulletWorldX - mapOffsetX;
+                            int prevViewportY = prevBulletWorldY - mapOffsetY;
+                            if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                                prevViewportY >= 0 && prevViewportY < frameHeight &&
+                                freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
+                                prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
+                            {
+                                Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                                Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
+                                Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
+                                Application.Driver.SetAttribute(ColorScheme!.Normal);
+                            }
+                        }
+                        
+                        // Invalidate cached map since we're removing a bullet
+                        _cachedMapViewport = null;
+                        
                         _bullets.RemoveAt(i);
                         bulletRemoved = true;
                         
@@ -647,8 +816,13 @@ public class Game : Window
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
-        // Get current map viewport for clearing previous positions
-        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+        // Use cached map viewport if available, otherwise get new one
+        var map = _cachedMapViewport;
+        if (map == null || map.Length != frameHeight)
+        {
+            map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+            _cachedMapViewport = map;
+        }
 
         // Get map viewport to convert world coordinates to viewport coordinates
         // Map.GetMap centers on (_player.X, _player.Y), so:
@@ -687,8 +861,14 @@ public class Game : Window
             }
         }
 
+        // Cache DateTime to avoid multiple system calls
+        if ((DateTime.Now - _cachedDateTime).TotalMilliseconds > 10)
+        {
+            _cachedDateTime = DateTime.Now;
+        }
+        
         // Flash between bright red and red based on time
-        bool isBright = (DateTime.Now.Millisecond / 250) % 2 == 0;
+        bool isBright = (_cachedDateTime.Millisecond / 250) % 2 == 0;
         var bulletColor = isBright ? Color.BrightRed : Color.Red;
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(bulletColor, Color.Black));
 
@@ -725,12 +905,13 @@ public class Game : Window
         int mapOffsetX = _player.X - (frameWidth / 2);
         int mapOffsetY = _player.Y - (frameHeight / 2);
 
-        // Flash between cyan and green based on time (changes every 75ms)
-        // Use total milliseconds to get smooth 75ms cycle
-        long totalMs = DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond;
-        bool isCyan = (totalMs / 75) % 2 == 0;
-        var hiveColor = isCyan ? Color.Cyan : Color.Green;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(hiveColor, Color.Black));
+        // Cache DateTime to avoid multiple system calls
+        if ((DateTime.Now - _cachedDateTime).TotalMilliseconds > 10)
+        {
+            _cachedDateTime = DateTime.Now;
+        }
+        
+        long totalMs = _cachedDateTime.Ticks / TimeSpan.TicksPerMillisecond;
 
         // Pre-calculate viewport bounds for early exit optimization
         int minViewportX = -2; // Hive is 2 wide, so allow 2 cells outside for partial visibility
@@ -742,6 +923,12 @@ public class Game : Window
         {
             if (hive.IsDestroyed)
                 continue;
+            
+            // Each hive has its own flash interval (reduced by 1/3 each hit)
+            // Flash between cyan and green based on time
+            bool isCyan = (totalMs / hive.FlashIntervalMs) % 2 == 0;
+            var hiveColor = isCyan ? Color.Cyan : Color.Green;
+            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(hiveColor, Color.Black));
 
             // Calculate viewport coordinates for the hive
             // The viewport is centered on the player at (frameWidth/2, frameHeight/2)
@@ -1119,7 +1306,7 @@ public class Game : Window
                     // Snipe moved into bullet - clear both bullet and snipe
                     snipe.IsAlive = false;
                     
-                    // Clear bullet first (at collision point)
+                    // Get fresh map to ensure we have correct character for clearing
                     int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
                     int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
                     var bulletMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
@@ -1138,10 +1325,47 @@ public class Game : Window
                         Application.Driver.SetAttribute(ColorScheme!.Normal);
                     }
                     
-                    // Clear snipe (both '@' and arrow)
+                    // Clear snipe first (both '@' and arrow) - uses world coordinates
                     ClearSnipePosition(snipe);
                     
-                    // Remove from lists
+                    // Clear bullet at collision point
+                    if (viewportX >= 0 && viewportX < frameWidth && 
+                        viewportY >= 0 && viewportY < frameHeight &&
+                        bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
+                        viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
+                    {
+                        Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                        Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
+                        Application.Driver.AddRune(bulletMap[viewportY][viewportX]);
+                        Application.Driver.SetAttribute(ColorScheme!.Normal);
+                    }
+                    
+                    // Also clear bullet's previous position if different
+                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                    prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                    prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    
+                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                    {
+                        int prevViewportX = prevBulletWorldX - mapOffsetX;
+                        int prevViewportY = prevBulletWorldY - mapOffsetY;
+                        if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                            prevViewportY >= 0 && prevViewportY < frameHeight &&
+                            bulletMap != null && prevViewportY >= 0 && prevViewportY < bulletMap.Length &&
+                            prevViewportX >= 0 && prevViewportX < bulletMap[prevViewportY].Length)
+                        {
+                            Application.Driver!.SetAttribute(ColorScheme!.Disabled);
+                            Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
+                            Application.Driver.AddRune(bulletMap[prevViewportY][prevViewportX]);
+                            Application.Driver.SetAttribute(ColorScheme!.Normal);
+                        }
+                    }
+                    
+                    // Invalidate cached map since we're removing entities
+                    _cachedMapViewport = null;
+                    
+                    // Remove from lists AFTER clearing
                     _snipes.RemoveAt(i);
                     _bullets.RemoveAt(k);
                     _gameState.SnipesUndestroyed--;
@@ -1200,8 +1424,13 @@ public class Game : Window
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
-        // Get map viewport for clearing previous positions
-        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+        // Use cached map viewport if available, otherwise get new one
+        var map = _cachedMapViewport;
+        if (map == null || map.Length != frameHeight)
+        {
+            map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+            _cachedMapViewport = map;
+        }
 
         // Step 1: Build a list of all positions that snipes PREVIOUSLY occupied
         // This includes both '@' character positions and arrow positions from the last frame
@@ -1413,26 +1642,32 @@ public class Game : Window
         {
             Application.Driver.SetAttribute(ColorScheme!.Disabled);
             
-            // Restore map character at snipe position
-            char mapChar = _map.FullMap[(snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight]
-                [(snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth];
-            Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-            Application.Driver.AddRune(mapChar);
+            // Clear '@' character and arrow based on direction
+            // When moving left (DirectionX < 0): arrow is at viewportX, '@' is at viewportX + 1
+            // When moving right or other: '@' is at viewportX, arrow is at viewportX + 1
+            int charViewportX; // Where the '@' character is
+            int arrowViewportX; // Where the arrow is
             
-            // Clear arrow based on direction
-            // Arrow position depends on direction:
-            // Moving left (DirectionX < 0): arrow is at (viewportX - 1, viewportY)
-            // Moving right or other: arrow is at (viewportX + 1, viewportY)
-            int arrowViewportX;
             if (snipe.DirectionX < 0)
             {
-                // Arrow is on the left
-                arrowViewportX = viewportX - 1;
+                // Moving left: arrow first, then '@'
+                arrowViewportX = viewportX;
+                charViewportX = viewportX + 1;
             }
             else
             {
-                // Arrow is on the right
+                // Moving right or other: '@' first, then arrow
+                charViewportX = viewportX;
                 arrowViewportX = viewportX + 1;
+            }
+            
+            // Clear '@' character position
+            if (charViewportX >= 0 && charViewportX < frameWidth)
+            {
+                char mapChar = _map.FullMap[(snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight]
+                    [(snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth];
+                Application.Driver.Move(charViewportX, viewportY + StatusBarHeight);
+                Application.Driver.AddRune(mapChar);
             }
             
             // Clear arrow position if within viewport
@@ -1695,6 +1930,16 @@ public class Game : Window
         if (Application.Driver == null)
             return;
 
+        // Performance optimization: Only redraw if values changed
+        if (_cachedHivesUndestroyed == _gameState.HivesUndestroyed &&
+            _cachedSnipesUndestroyed == _gameState.SnipesUndestroyed &&
+            _cachedLives == _player.Lives &&
+            _cachedLevel == _gameState.Level &&
+            _cachedScore == _gameState.Score)
+        {
+            return; // No changes, skip redraw
+        }
+
         int currentWidth = Application.Driver.Cols;
         
         // Set status bar color: white text on blue background
@@ -1739,6 +1984,13 @@ public class Game : Window
         Application.Driver.AddStr(new string(' ', currentWidth - 2));
         
         Application.Driver.SetAttribute(ColorScheme!.Normal);
+        
+        // Cache current values
+        _cachedHivesUndestroyed = _gameState.HivesUndestroyed;
+        _cachedSnipesUndestroyed = _gameState.SnipesUndestroyed;
+        _cachedLives = _player.Lives;
+        _cachedLevel = _gameState.Level;
+        _cachedScore = _gameState.Score;
     }
 
     private void DrawPlayer()
@@ -1757,8 +2009,14 @@ public class Game : Window
         int topLeftCol = frameWidth / 2;
         int topLeftRow = (frameHeight / 2) + StatusBarHeight;
 
-        var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
-        var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
+        // Cache DateTime to avoid multiple system calls
+        if ((DateTime.Now - _cachedDateTime).TotalMilliseconds > 10)
+        {
+            _cachedDateTime = DateTime.Now;
+        }
+        
+        var eyes = _cachedDateTime.Millisecond < 500 ? "ÔÔ" : "OO";
+        var mouth = _cachedDateTime.Millisecond < 500 ? "◄►" : "◂▸";
 
         Application.Driver!.SetAttribute(ColorScheme!.Focus);
         Application.Driver!.Move(topLeftCol, topLeftRow);
