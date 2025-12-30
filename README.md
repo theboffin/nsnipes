@@ -114,14 +114,27 @@ Use the provided `run.sh` script to build and run the game:
   - Bullets can hit snipes at their position or arrow position
   - Snipes can move into bullet positions
   - On collision: snipe is killed, bullet is removed, player gains 25 points
+  - Both snipe '@' character and arrow are properly cleared when killed
 - **Bullet-Hive Collision**: Implemented hive damage system
   - Bullets stop and are removed when hitting a hive
   - Hives track hit count (3 hits required to destroy)
-  - When destroyed: hive is removed, all unreleased snipes are killed, player gains 500 points + 25 per unreleased snipe
+  - When destroyed: hive is removed from screen, all unreleased snipes are killed, player gains 500 points + 25 per unreleased snipe
 - **Scoring System**: Fully functional scoring with points awarded for:
   - Killing snipes: 25 points each
   - Destroying hives: 500 points base + 25 points per unreleased snipe
 - **Status Bar Updates**: Now displays Level and Score in addition to hives, snipes, and lives
+
+### Visual and Performance Improvements
+- **Refined Snipe Clearing Algorithm**: Implemented sophisticated position tracking system
+  - Tracks all previous snipe positions (both '@' and arrow)
+  - Only clears positions that are no longer occupied by any snipe
+  - Prevents artifacts when multiple snipes move in close proximity
+  - Handles cases where snipes don't move but direction changes
+  - Previous positions are updated after drawing to ensure accuracy
+- **Artifact Elimination**: Fixed remaining visual artifacts from snipe movement
+  - Both '@' characters and arrows are now properly cleared
+  - Works correctly even with many snipes spawning from hives
+  - Handles edge cases like snipes colliding and bouncing back
 
 ### Core Game Systems
 - **Added Hive System**: Implemented hives that spawn snipes, with visual representation (glowing cyan/green boxes)
@@ -152,7 +165,8 @@ Use the provided `run.sh` script to build and run the game:
 ### Performance Optimizations
 - **Separate Timers**: Hives and snipes have their own update timers for better performance
 - **Viewport Culling**: Only visible objects are drawn
-- **Efficient Redrawing**: Previous positions are properly cleared before drawing new positions
+- **Efficient Redrawing**: Sophisticated position tracking ensures only necessary positions are cleared
+- **Smart Clearing**: Uses HashSet-based position tracking to avoid clearing positions still occupied by other snipes
 
 ### Technical Improvements
 - **Map Wrapping**: Proper handling of coordinate wrapping for all game entities
@@ -168,7 +182,7 @@ Use the provided `run.sh` script to build and run the game:
 ✅ Bullet-snipe collision (both directions)  
 ✅ Bullet-hive collision and damage  
 ✅ Hive spawning and display  
-✅ Hive destruction (3 hits required)  
+✅ Hive destruction (3 hits required) - properly cleared from screen  
 ✅ Snipe spawning from hives  
 ✅ Snipe movement and AI  
 ✅ Snipe-to-snipe collision and bouncing  
@@ -178,6 +192,7 @@ Use the provided `run.sh` script to build and run the game:
 ✅ Map scrolling and wrapping  
 ✅ Game state tracking  
 ✅ Scoring system (25 points per snipe, 500 + 25 per unreleased snipe for hives)  
+✅ Clean visual rendering - no artifacts from snipe movement  
 
 ## Not Yet Implemented
 

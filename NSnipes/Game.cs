@@ -497,15 +497,10 @@ public class Game : Window
                 // Check bullet at snipe position
                 if (bulletWorldX == snipeWorldX && bulletWorldY == snipeWorldY)
                 {
-                    // Bullet hit snipe
+                    // Bullet hit snipe - clear both bullet and snipe
                     snipe.IsAlive = false;
-                    ClearSnipePosition(snipe);
-                    _snipes.RemoveAt(j);
-                    _gameState.SnipesUndestroyed--;
-                    _gameState.Score += 25;
-                    _player.Score += 25;
                     
-                    // Remove bullet
+                    // Clear bullet first (at collision point)
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
                     if (viewportX >= 0 && viewportX < frameWidth && 
@@ -518,7 +513,16 @@ public class Game : Window
                         Application.Driver.AddRune(map[viewportY][viewportX]);
                         Application.Driver.SetAttribute(ColorScheme!.Normal);
                     }
+                    
+                    // Clear snipe (both '@' and arrow)
+                    ClearSnipePosition(snipe);
+                    
+                    // Remove from lists
+                    _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
+                    _gameState.SnipesUndestroyed--;
+                    _gameState.Score += 25;
+                    _player.Score += 25;
                     bulletRemoved = true;
                     break; // Bullet is removed, exit snipe loop
                 }
@@ -528,15 +532,10 @@ public class Game : Window
                 arrowWorldX = (arrowWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                 if (bulletWorldX == arrowWorldX && bulletWorldY == snipeWorldY)
                 {
-                    // Bullet hit snipe arrow
+                    // Bullet hit snipe arrow - clear both bullet and snipe
                     snipe.IsAlive = false;
-                    ClearSnipePosition(snipe);
-                    _snipes.RemoveAt(j);
-                    _gameState.SnipesUndestroyed--;
-                    _gameState.Score += 25;
-                    _player.Score += 25;
                     
-                    // Remove bullet
+                    // Clear bullet first (at collision point)
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
                     if (viewportX >= 0 && viewportX < frameWidth && 
@@ -549,7 +548,16 @@ public class Game : Window
                         Application.Driver.AddRune(map[viewportY][viewportX]);
                         Application.Driver.SetAttribute(ColorScheme!.Normal);
                     }
+                    
+                    // Clear snipe (both '@' and arrow)
+                    ClearSnipePosition(snipe);
+                    
+                    // Remove from lists
+                    _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
+                    _gameState.SnipesUndestroyed--;
+                    _gameState.Score += 25;
+                    _player.Score += 25;
                     bulletRemoved = true;
                     break; // Bullet is removed, exit snipe loop
                 }
@@ -964,11 +972,8 @@ public class Game : Window
                     preferredDirX = deltaX > 0 ? 1 : -1;
             }
 
-            // Store previous position and direction before moving
-            snipe.PreviousX = snipe.X;
-            snipe.PreviousY = snipe.Y;
-            snipe.PreviousDirectionX = snipe.DirectionX;
-            snipe.PreviousDirectionY = snipe.DirectionY;
+            // Note: PreviousX/PreviousY are updated at the end of DrawSnipes()
+            // to match what was actually drawn. We don't update them here.
 
             // Get all possible valid directions
             List<(int dx, int dy)> possibleDirections = new List<(int, int)>();
@@ -1111,15 +1116,10 @@ public class Game : Window
                 // Check if snipe is at bullet position
                 if (snipeWorldX == bulletWorldX && snipeWorldY == bulletWorldY)
                 {
-                    // Snipe moved into bullet
+                    // Snipe moved into bullet - clear both bullet and snipe
                     snipe.IsAlive = false;
-                    ClearSnipePosition(snipe);
-                    _snipes.RemoveAt(i); // Remove snipe from list
-                    _gameState.SnipesUndestroyed--;
-                    _gameState.Score += 25;
-                    _player.Score += 25;
                     
-                    // Remove bullet
+                    // Clear bullet first (at collision point)
                     int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
                     int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
                     var bulletMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
@@ -1137,7 +1137,16 @@ public class Game : Window
                         Application.Driver.AddRune(bulletMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(ColorScheme!.Normal);
                     }
+                    
+                    // Clear snipe (both '@' and arrow)
+                    ClearSnipePosition(snipe);
+                    
+                    // Remove from lists
+                    _snipes.RemoveAt(i);
                     _bullets.RemoveAt(k);
+                    _gameState.SnipesUndestroyed--;
+                    _gameState.Score += 25;
+                    _player.Score += 25;
                     // Snipe is removed, continue to next snipe
                     goto nextSnipe;
                 }
@@ -1194,103 +1203,106 @@ public class Game : Window
         // Get map viewport for clearing previous positions
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
 
-        // First, clear previous snipe positions
-        Application.Driver.SetAttribute(ColorScheme!.Disabled);
+        // Step 1: Build a list of all positions that snipes PREVIOUSLY occupied
+        // This includes both '@' character positions and arrow positions from the last frame
+        // We ALWAYS add previous positions, even if snipe hasn't moved (direction might have changed)
+        HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>();
+        
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
                 continue;
-
-            // Always clear previous position (even if position didn't change, direction might have)
-            // This ensures '@' characters and arrows are properly cleared
-            // Also clear if direction changed even if position is the same
-            bool positionChanged = snipe.X != snipe.PreviousX || snipe.Y != snipe.PreviousY;
-            bool directionChanged = snipe.DirectionX != snipe.PreviousDirectionX || snipe.DirectionY != snipe.PreviousDirectionY;
             
-            if (positionChanged || directionChanged)
+            // Get previous world coordinates (wrapped)
+            int prevWorldX = (snipe.PreviousX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+            int prevWorldY = (snipe.PreviousY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            
+            // Determine where '@' and arrow were based on previous direction
+            // Drawing logic: DirectionX < 0: arrow at center, '@' to right
+            //                 DirectionX >= 0: '@' at center, arrow to right
+            int prevCharWorldX, prevArrowWorldX;
+            if (snipe.PreviousDirectionX < 0)
             {
-                // Calculate previous viewport coordinates
-                int prevDeltaX = snipe.PreviousX - _player.X;
-                int prevDeltaY = snipe.PreviousY - _player.Y;
-
-                // Handle wrapping
-                if (prevDeltaX > _map.MapWidth / 2)
-                    prevDeltaX -= _map.MapWidth;
-                else if (prevDeltaX < -_map.MapWidth / 2)
-                    prevDeltaX += _map.MapWidth;
-
-                if (prevDeltaY > _map.MapHeight / 2)
-                    prevDeltaY -= _map.MapHeight;
-                else if (prevDeltaY < -_map.MapHeight / 2)
-                    prevDeltaY += _map.MapHeight;
-
-                int prevViewportX = (frameWidth / 2) + prevDeltaX;
-                int prevViewportY = (frameHeight / 2) + prevDeltaY;
-
-                // Clear previous position if within viewport
-                // The '@' character position depends on previous direction:
-                // Moving left (PreviousDirectionX < 0): arrow at prevViewportX, '@' at prevViewportX + 1
-                // Moving right or other: '@' at prevViewportX, arrow at prevViewportX + 1
-                
-                // Clear both positions (character and arrow) to ensure nothing is left behind
-                // Calculate world coordinates for both positions
-                
-                // Position 1: The viewport center position (prevViewportX)
-                // This is where '@' is when moving right, or arrow when moving left
-                if (prevViewportX >= 0 && prevViewportX < frameWidth && 
-                    prevViewportY >= 0 && prevViewportY < frameHeight)
-                {
-                    int worldX1 = snipe.PreviousX;
-                    int worldY1 = snipe.PreviousY;
-                    worldX1 = (worldX1 % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    worldY1 = (worldY1 % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
-                    if (worldY1 >= 0 && worldY1 < _map.MapHeight && worldX1 >= 0 && worldX1 < _map.MapWidth)
-                    {
-                        char mapChar1 = _map.FullMap[worldY1][worldX1];
-                        Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                        Application.Driver.AddRune(mapChar1);
-                    }
-                }
-                
-                // Position 2: One cell to the right (prevViewportX + 1)
-                // This is where arrow is when moving right, or '@' when moving left
-                if (prevViewportX + 1 >= 0 && prevViewportX + 1 < frameWidth && 
-                    prevViewportY >= 0 && prevViewportY < frameHeight)
-                {
-                    int worldX2 = snipe.PreviousX + 1;
-                    int worldY2 = snipe.PreviousY;
-                    worldX2 = (worldX2 % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    worldY2 = (worldY2 % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
-                    if (worldY2 >= 0 && worldY2 < _map.MapHeight && worldX2 >= 0 && worldX2 < _map.MapWidth)
-                    {
-                        char mapChar2 = _map.FullMap[worldY2][worldX2];
-                        Application.Driver.Move(prevViewportX + 1, prevViewportY + StatusBarHeight);
-                        Application.Driver.AddRune(mapChar2);
-                    }
-                }
-                
-                // Position 3: One cell to the left (prevViewportX - 1) - for left-moving arrows
-                if (prevViewportX - 1 >= 0 && prevViewportX - 1 < frameWidth && 
-                    prevViewportY >= 0 && prevViewportY < frameHeight && snipe.PreviousDirectionX < 0)
-                {
-                    int worldX3 = snipe.PreviousX - 1;
-                    int worldY3 = snipe.PreviousY;
-                    worldX3 = (worldX3 % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    worldY3 = (worldY3 % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
-                    if (worldY3 >= 0 && worldY3 < _map.MapHeight && worldX3 >= 0 && worldX3 < _map.MapWidth)
-                    {
-                        char mapChar3 = _map.FullMap[worldY3][worldX3];
-                        Application.Driver.Move(prevViewportX - 1, prevViewportY + StatusBarHeight);
-                        Application.Driver.AddRune(mapChar3);
-                    }
-                }
+                // Moving left: arrow was at snipe position, '@' was one cell to the right
+                prevArrowWorldX = prevWorldX;
+                prevCharWorldX = (prevWorldX + 1) % _map.MapWidth;
+            }
+            else
+            {
+                // Moving right, up, down, or diagonal (DirectionX >= 0): '@' at snipe position, arrow to the right
+                prevCharWorldX = prevWorldX;
+                prevArrowWorldX = (prevWorldX + 1) % _map.MapWidth;
+            }
+            
+            // Always add both positions to clear list
+            positionsToClear.Add((prevCharWorldX, prevWorldY));
+            positionsToClear.Add((prevArrowWorldX, prevWorldY));
+        }
+        
+        // Step 2: Build a set of all positions that snipes CURRENTLY occupy
+        // Remove these from the positionsToClear set (don't clear positions that are still occupied)
+        foreach (var snipe in _snipes)
+        {
+            if (!snipe.IsAlive)
+                continue;
+            
+            int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+            int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            
+            // Calculate current '@' and arrow positions based on current direction
+            // Drawing logic: DirectionX < 0: arrow at center, '@' to right
+            //                 DirectionX >= 0: '@' at center, arrow to right
+            int charWorldX, arrowWorldX;
+            if (snipe.DirectionX < 0)
+            {
+                // Moving left: arrow at snipe position, '@' one cell to the right
+                arrowWorldX = snipeWorldX;
+                charWorldX = (snipeWorldX + 1) % _map.MapWidth;
+            }
+            else
+            {
+                // Moving right, up, down, or diagonal (DirectionX >= 0): '@' at snipe position, arrow to the right
+                charWorldX = snipeWorldX;
+                arrowWorldX = (snipeWorldX + 1) % _map.MapWidth;
+            }
+            positionsToClear.Remove((charWorldX, snipeWorldY));
+            positionsToClear.Remove((arrowWorldX, snipeWorldY));
+        }
+        
+        // Step 3: Clear all positions that remain in positionsToClear (no longer occupied)
+        Application.Driver.SetAttribute(ColorScheme!.Disabled);
+        foreach (var (worldX, worldY) in positionsToClear)
+        {
+            // Calculate viewport coordinates
+            int deltaX = worldX - _player.X;
+            int deltaY = worldY - _player.Y;
+            
+            // Handle wrapping
+            if (deltaX > _map.MapWidth / 2)
+                deltaX -= _map.MapWidth;
+            else if (deltaX < -_map.MapWidth / 2)
+                deltaX += _map.MapWidth;
+            
+            if (deltaY > _map.MapHeight / 2)
+                deltaY -= _map.MapHeight;
+            else if (deltaY < -_map.MapHeight / 2)
+                deltaY += _map.MapHeight;
+            
+            int viewportX = (frameWidth / 2) + deltaX;
+            int viewportY = (frameHeight / 2) + deltaY;
+            
+            if (viewportX >= 0 && viewportX < frameWidth && 
+                viewportY >= 0 && viewportY < frameHeight &&
+                worldY >= 0 && worldY < _map.MapHeight && 
+                worldX >= 0 && worldX < _map.MapWidth)
+            {
+                char mapChar = _map.FullMap[worldY][worldX];
+                Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
+                Application.Driver.AddRune(mapChar);
             }
         }
-
-        // Now draw snipes at their current positions
+        
+        // Step 4: Draw snipes at their new positions
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
@@ -1353,6 +1365,20 @@ public class Game : Window
         }
 
         Application.Driver.SetAttribute(ColorScheme!.Normal);
+        
+        // CRITICAL: Update PreviousX/PreviousY to match what was actually drawn
+        // This ensures that on the next frame, we clear the correct positions
+        foreach (var snipe in _snipes)
+        {
+            if (!snipe.IsAlive)
+                continue;
+            
+            // Update previous position to current position (what was just drawn)
+            snipe.PreviousX = snipe.X;
+            snipe.PreviousY = snipe.Y;
+            snipe.PreviousDirectionX = snipe.DirectionX;
+            snipe.PreviousDirectionY = snipe.DirectionY;
+        }
     }
 
     private void ClearSnipePosition(Snipe snipe)
