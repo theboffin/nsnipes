@@ -14,6 +14,6 @@ public class Player
         X = x;
         Y = y;
         Score = 0;
-        Lives = 3;
+        Lives = 5;
     }
 }
