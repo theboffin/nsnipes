@@ -1,4 +1,6 @@
 ﻿using Terminal.Gui;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace NSnipes;
 
@@ -30,6 +32,13 @@ public class Game : Window
     private int _cachedLives = -1;
     private int _cachedLevel = -1;
     private int _cachedScore = -1;
+    
+    // Frame rate tracking
+    private DateTime _lastFrameTime = DateTime.Now;
+    private double _currentFPS = 0.0;
+    private readonly Queue<double> _fpsHistory = new Queue<double>();
+    private const int FpsHistorySize = 10; // Average over last 10 frames
+    private int _cachedFPS = -1;
 
     // Intro screen
     private IntroScreen _introScreen;
@@ -158,8 +167,8 @@ public class Game : Window
             return true;
         });
 
-        // Timer for player animation, movement, and initial map draw (100ms)
-        Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+        // Timer for player animation, movement, and initial map draw (40ms for more responsive movement)
+        Application.AddTimeout(TimeSpan.FromMilliseconds(40), () =>
         {
             if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_mapDrawn)
             {
@@ -564,9 +573,39 @@ public class Game : Window
         if (_introScreen.IsActive || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
             return;
 
+        // Track frame rate
+        UpdateFrameRate();
+
         DrawPlayerWithClearing();
         DrawBullets();
         // Hives and snipes are drawn on their own timers for better performance
+    }
+    
+    private void UpdateFrameRate()
+    {
+        DateTime now = DateTime.Now;
+        double elapsedMs = (now - _lastFrameTime).TotalMilliseconds;
+        
+        if (elapsedMs > 0)
+        {
+            // Calculate FPS for this frame
+            double frameFPS = 1000.0 / elapsedMs;
+            
+            // Add to history
+            _fpsHistory.Enqueue(frameFPS);
+            if (_fpsHistory.Count > FpsHistorySize)
+            {
+                _fpsHistory.Dequeue();
+            }
+            
+            // Calculate average FPS
+            if (_fpsHistory.Count > 0)
+            {
+                _currentFPS = _fpsHistory.Average();
+            }
+        }
+        
+        _lastFrameTime = now;
     }
 
     private void DrawPlayerWithClearing()
@@ -2237,11 +2276,13 @@ public class Game : Window
             return;
 
         // Performance optimization: Only redraw if values changed
+        int currentFPS = (int)Math.Round(_currentFPS);
         if (_cachedHivesUndestroyed == _gameState.HivesUndestroyed &&
             _cachedSnipesUndestroyed == _gameState.SnipesUndestroyed &&
             _cachedLives == _player.Lives &&
             _cachedLevel == _gameState.Level &&
-            _cachedScore == _gameState.Score)
+            _cachedScore == _gameState.Score &&
+            _cachedFPS == currentFPS)
         {
             return; // No changes, skip redraw
         }
@@ -2273,7 +2314,10 @@ public class Game : Window
         Application.Driver.AddStr($"Level: {_gameState.Level}  ");
 
         // Draw score
-        Application.Driver.AddStr($"Score: {_gameState.Score}");
+        Application.Driver.AddStr($"Score: {_gameState.Score}  ");
+
+        // Draw FPS (currentFPS already calculated at top of method)
+        Application.Driver.AddStr($"FPS: {currentFPS}");
 
         // Clear rest of first row
         int currentPos = Application.Driver.Col;
@@ -2297,6 +2341,7 @@ public class Game : Window
         _cachedLives = _player.Lives;
         _cachedLevel = _gameState.Level;
         _cachedScore = _gameState.Score;
+        _cachedFPS = currentFPS;
     }
 
     private void DrawPlayer()
