@@ -58,6 +58,11 @@ public class Game : Window
         {
             ResetGame(); // Reset all game state for a new game
         };
+        _introScreen.OnRespawnComplete += () =>
+        {
+            // When respawn clearing effect completes, ensure map and status bar are redrawn
+            _mapDrawn = false; // Force redraw of map (which will also redraw status bar)
+        };
         _introScreen.OnExit += () =>
         {
             Application.RequestStop();
@@ -1544,6 +1549,9 @@ public class Game : Window
                 // Snipe explodes, player loses a life
                 snipe.IsAlive = false;
                 _player.Lives--;
+                
+                // Invalidate cached lives to ensure status bar updates
+                _cachedLives = -1;
 
                 if (_player.Lives > 0)
                 {
@@ -1551,6 +1559,8 @@ public class Game : Window
                     var (x, y) = FindRandomValidPosition();
                     _player.X = x;
                     _player.Y = y;
+                    // Invalidate cached map viewport since player moved
+                    _cachedMapViewport = null;
                     // Trigger clearing effect with lives message
                     _introScreen.StartClearingEffect($"{_player.Lives} Lives Left");
                 }

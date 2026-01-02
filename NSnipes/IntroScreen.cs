@@ -5,7 +5,8 @@ namespace NSnipes;
 public class IntroScreen
 {
     // Events for communication with Game
-    public event Action<int>? OnStartGame; // Level
+    public event Action<int>? OnStartGame; // Level - called when starting a new game from menu
+    public event Action? OnRespawnComplete; // Called when respawn clearing effect completes
     public event Action? OnExit;
     public event Action<string>? OnInitialsChanged; // New initials
     public event Action? OnReturnToIntro; // When returning to intro screen (e.g., from game over)
@@ -17,6 +18,7 @@ public class IntroScreen
     private bool _clearingScreen = false;
     private bool _gameOver = false;
     private bool _waitingForGameOverKey = false;
+    private bool _isStartingNewGame = false; // Track if clearing effect is for starting a new game vs respawn
     
     private DateTime _bannerStartTime;
     private int _bannerScrollPosition = 0;
@@ -138,7 +140,7 @@ public class IntroScreen
         }
     }
     
-    public void StartClearingEffect(string message)
+    public void StartClearingEffect(string message, bool isStartingNewGame = false)
     {
         _clearingScreen = true;
         _clearingStartTime = DateTime.Now;
@@ -146,6 +148,7 @@ public class IntroScreen
         _clearingMessage = message;
         _gameOver = false;
         _waitingForGameOverKey = false;
+        _isStartingNewGame = isStartingNewGame; // Track if this is for starting a new game
     }
     
     public void ShowGameOver(string message)
@@ -310,7 +313,7 @@ public class IntroScreen
         switch (_selectedMenuIndex)
         {
             case 0: // Start a New Game
-                StartClearingEffect($"Level {_gameState.Level}");
+                StartClearingEffect($"Level {_gameState.Level}", isStartingNewGame: true);
                 break;
                 
             case 1: // Join an Existing Game
@@ -825,7 +828,20 @@ public class IntroScreen
                 // Normal game start or respawn
                 _isActive = false;
                 _clearingScreen = false;
-                OnStartGame?.Invoke(_gameState.Level);
+                
+                // Only call OnStartGame if we're actually starting a new game (from menu)
+                // If this is a respawn, just end the clearing effect without resetting game state
+                if (_isStartingNewGame)
+                {
+                    OnStartGame?.Invoke(_gameState.Level);
+                }
+                else
+                {
+                    // This is a respawn - notify that clearing effect completed
+                    OnRespawnComplete?.Invoke();
+                }
+                
+                _isStartingNewGame = false; // Reset flag
             }
         }
     }
