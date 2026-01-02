@@ -13,6 +13,15 @@ Use the provided `run.sh` script to build and run the game:
 ./run.sh
 ```
 
+![Intro Screen](./nsnipes-intro.png)
+The 'Intro Screen' will change quite a bit as multi-player gaming is added
+
+![Game Play](./nsnipes-game.png)
+Game play, your player remains central - as you move the map moves around you and is endlessly scrolling. i.e. if you go off the top of the map you seemlessly rejoin the bottom - the map feels massive.  Hives release snipes,  and snipes will wander around the maze, but be careful, as soon as they get a sniff of you, they'll start to home in on you.
+
+You can shoot snipes, you have bullets that can be shot in any direction and will bounce off walls too!   You can shoot hives, though it will take 3 shots to destroy a hive - hives are valuable to shoot, as you'll gain points for shooting the hive plus points for all of the un-released snipes within the hive -- shoot them quickly to gain more points!
+
+
 ## Preface
 When I started this project, I was in between jobs and had alot of spare time.  Since then i've been fortunate enough to be very busy working.  The downside, is that this project over the last 10 months or so has seen no activity.  While I am very keen to get this project completed to my initial vision, time is still very valuable to me.   So I decided to accellerate the development of this by using 'Vibe Coding' - I really do hate that term, there is nothing 'vibby' about what i'm doing - I'm using an AI tool 'Cursor', giving it instructions and letting it build some code for me.  When it gets it wrong i'm re-iterating my intent and coercing it down a more correct path.
 
@@ -43,7 +52,7 @@ So what's left to do:
     - game coordination across the network
   - After all players have lost their last life, produce a final results screen to all player showing the ranking of each player and scores etc.
   - option to restart another game with all the same players
-  
+
 
 
 ## Gameplay Summary
