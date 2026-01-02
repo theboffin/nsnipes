@@ -13,6 +13,39 @@ Use the provided `run.sh` script to build and run the game:
 ./run.sh
 ```
 
+## Preface
+When I started this project, I was in between jobs and had alot of spare time.  Since then i've been fortunate enough to be very busy working.  The downside, is that this project over the last 10 months or so has seen no activity.  While I am very keen to get this project completed to my initial vision, time is still very valuable to me.   So I decided to accellerate the development of this by using 'Vibe Coding' - I really do hate that term, there is nothing 'vibby' about what i'm doing - I'm using an AI tool 'Cursor', giving it instructions and letting it build some code for me.  When it gets it wrong i'm re-iterating my intent and coercing it down a more correct path.
+
+I chose this route so that I could get this project closer to completion, but also to extend my skills in working with tools like Cursor.
+
+It's not perfect, I know that - some of the code committed, I'm far from being 100% happy with - but each prompt, each code commit is moving me closer to a working game and closer to my vision of having NSnipes run multi-player over the internet.   I do believe there will be an exercise of 'hand-refinement' on the code,  but i'm reserving that till i'm closer to the end.
+
+It's been an interesting and sometimes frustrating journey so far working in this way, and while as I say above the code is far from being 100% perfect, the game has developed at a pace that I wasn't able to commit my own personal time to.
+
+So what's left to do:
+- Levels
+  - Currently the game doesn't know when a level is complete (i.e. all Hives and Snipes are destroyed)
+  - Incremental difficulty as Level's increase, i.e. more Snipes per hive,  more Hives
+  - Ability to start the game at a given level (and for it to know based on level number how many hives/snipes to use)
+- Start New Game
+  - Should prompt how many players (default at 1)
+  - Should advertise the game id - i.e. a 6 digit alpha numeric game id.
+  - Should wait 30 secs for players to join (upto the number specified)
+  - Game to start after players have joined or 30secs is up
+- Join a game
+  - Should prompt for game id (a 6 digit alpha numeric code)
+  - if the game exists and is waiting, then this player should wait for the game to start
+  - if the game doesn't exist or is no longer waiting, give player a message
+- Network game play
+  - by either 'starting' or 'joining' a game played across the internet keyed on game id.  
+    - The game 'server' i.e. the program which 'Started' a game will send updates to all player for snipe movements, hive details, and player locations.
+    - other players who 'joined' the game will listen to snipe movements, player movements, etc to update their screens
+    - game coordination across the network
+  - After all players have lost their last life, produce a final results screen to all player showing the ranking of each player and scores etc.
+  - option to restart another game with all the same players
+  
+
+
 ## Gameplay Summary
 
 ### Intro Screen and Menu System
