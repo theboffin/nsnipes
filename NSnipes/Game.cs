@@ -17,7 +17,7 @@ public class Game : Window
     private const double BulletSpeed = 1.0; // Bullets move 1.0 cell per update (10ms) to ensure proper wall collision
     private const int StatusBarHeight = 2; // First 2 rows reserved for status information
     private Random _random = new Random();
-    
+
     // Performance optimization: Track previous positions to avoid unnecessary redraws
     private int _previousPlayerCellX = -1;
     private int _previousPlayerCellY = -1;
@@ -30,96 +30,51 @@ public class Game : Window
     private int _cachedLives = -1;
     private int _cachedLevel = -1;
     private int _cachedScore = -1;
-    
-    // Intro screen state
-    private bool _inIntroScreen = true;
-    private bool _bannerScrolling = true;
-    private bool _showMenu = false;
-    private bool _clearingScreen = false;
-    private DateTime _bannerStartTime;
-    private int _bannerScrollPosition = 0;
-    private int _clearingRectSize = 0;
-    private DateTime _clearingStartTime;
-    private string _clearingMessage = "";
-    private bool _gameOver = false;
-    private bool _waitingForGameOverKey = false;
-    
-    // Menu state
-    private int _selectedMenuIndex = 0;
-    private readonly string[] _menuItems = { "Start a New Game", "Join an Existing Game", "Initials", "Exit" };
-    private bool _enteringInitials = false;
-    private string _initialsInput = "";
+
+    // Intro screen
+    private IntroScreen _introScreen;
     private GameConfig _config;
-    
-    // NSNIPES banner definition (7 rows tall, each letter is 7 characters wide)
-    private static readonly string[] BannerN = new[]
-    {
-        "█     █",
-        "██    █",
-        "█ █   █",
-        "█  █  █",
-        "█   █ █",
-        "█    ██",
-        "█     █"
-    };
-    
-    private static readonly string[] BannerS = new[]
-    {
-        " █████ ",
-        "█      ",
-        "█      ",
-        " █████ ",
-        "      █",
-        "      █",
-        " █████ "
-    };
-    
-    private static readonly string[] BannerI = new[]
-    {
-        "███████",
-        "   █   ",
-        "   █   ",
-        "   █   ",
-        "   █   ",
-        "   █   ",
-        "███████"
-    };
-    
-    private static readonly string[] BannerP = new[]
-    {
-        "██████ ",
-        "█     █",
-        "█     █",
-        "██████ ",
-        "█      ",
-        "█      ",
-        "█      "
-    };
-    
-    private static readonly string[] BannerE = new[]
-    {
-        "███████",
-        "█      ",
-        "█      ",
-        "██████ ",
-        "█      ",
-        "█      ",
-        "███████"
-    };
+
+    // Key state tracking for smooth movement
+    private Dictionary<KeyCode, DateTime> _pressedKeys = new Dictionary<KeyCode, DateTime>();
+    private const int KeyRepeatThresholdMs = 150; // Consider key released if not seen in 150ms
 
     public Game()
     {
         // Load configuration (initials)
         _config = GameConfig.Load();
-        
+
         _map = new Map();
         var (x, y) = FindRandomValidPosition();
         _player = new Player(x, y);
         _player.Initials = _config.Initials; // Use loaded initials
-        
+
         // Initialize game state and hives
         InitializeHives();
-        
+
+        // Initialize intro screen
+        _introScreen = new IntroScreen(_config, _gameState);
+        _introScreen.OnStartGame += (level) =>
+        {
+            ResetGame(); // Reset all game state for a new game
+        };
+        _introScreen.OnExit += () =>
+        {
+            Application.RequestStop();
+        };
+        _introScreen.OnInitialsChanged += (initials) =>
+        {
+            _player.Initials = initials;
+        };
+        _introScreen.OnReturnToIntro += () =>
+        {
+            // Reset game state when returning to intro screen
+            _mapDrawn = false;
+            _pressedKeys.Clear(); // Clear any lingering pressed keys
+        };
+        _introScreen.SetMapCharCallback((x, y) => GetMapCharAtPosition(x, y));
+        _introScreen.Show();
+
         Title = "NSnipes";
 
         // Make window fill entire screen
@@ -127,7 +82,7 @@ public class Game : Window
         Y = 0;
         Width = Dim.Fill();
         Height = Dim.Fill();
-        
+
         // Prevent default Escape key behavior (we handle it ourselves)
         Modal = false;
         CanFocus = true;
@@ -152,7 +107,7 @@ public class Game : Window
             if (e.KeyCode == KeyCode.Esc)
             {
                 // Handle Escape before any default behavior
-                if (_inIntroScreen)
+                if (_introScreen.IsActive)
                 {
                     // Exit application from intro screen
                     Application.RequestStop();
@@ -160,19 +115,10 @@ public class Game : Window
                 else
                 {
                     // Return to intro screen from game
-                    _inIntroScreen = true;
-                    _bannerScrolling = false;
-                    _showMenu = true;
-                    _clearingScreen = false;
-                    _bannerStartTime = DateTime.Now;
-                    // Calculate centered banner position - only if Driver is available
+                    _introScreen.Show();
                     if (Application.Driver != null)
                     {
-                        int width = Application.Driver.Cols;
-                        int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
-                        _bannerScrollPosition = (width - bannerWidth) / 2;
-                        // Force redraw of intro screen immediately
-                        DrawIntroScreen();
+                        _introScreen.Show();
                     }
                 }
                 // The event is handled, but Terminal.Gui might still process it
@@ -182,52 +128,53 @@ public class Game : Window
             // For other keys, handle them inline
             HandleKeyDown(sender, e);
         };
-        
+
         // Also handle at Window level as backup
         KeyDown += HandleWindowKeyDown;
-        
+
         Application.SizeChanging += (s, e) =>
         {
-            if (!_inIntroScreen)
+            if (!_introScreen.IsActive)
             {
                 DrawMapAndPlayer();
             }
         };
 
-        // Start intro screen
-        _bannerStartTime = DateTime.Now;
-        
         // Timer for intro screen animation and clearing effects (16ms for ~60fps)
         Application.AddTimeout(TimeSpan.FromMilliseconds(16), () =>
         {
             if (Application.Driver != null)
             {
-                if (_inIntroScreen)
+                if (_introScreen.IsActive || _introScreen.IsClearingScreen || _introScreen.IsWaitingForGameOverKey)
                 {
-                    DrawIntroScreen();
-                }
-                else if (_clearingScreen && !_gameOver)
-                {
-                    // Draw clearing effect during gameplay (e.g., when player loses a life)
-                    int width = Application.Driver.Cols;
-                    int height = Application.Driver.Rows;
-                    DrawClearingEffect(width, height);
+                    _introScreen.Draw();
                 }
             }
             return true;
         });
 
-        // Timer for player animation and initial map draw (100ms)
+        // Timer for player animation, movement, and initial map draw (100ms)
         Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
         {
-            if (!_inIntroScreen && !_clearingScreen && !_mapDrawn)
+            if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_mapDrawn)
             {
                 DrawMapAndPlayer();
                 _mapDrawn = true;
             }
-            else if (!_inIntroScreen && !_clearingScreen)
+            else if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                DrawPlayer();
+                // Process continuous movement based on pressed keys
+                bool playerMoved = ProcessPlayerMovement();
+                if (playerMoved)
+                {
+                    // Player moved - redraw map and player
+                    DrawMapAndPlayer();
+                }
+                else
+                {
+                    // Player didn't move - just redraw player animation
+                    DrawPlayer();
+                }
             }
             return true;
         });
@@ -235,7 +182,7 @@ public class Game : Window
         // Separate timer for bullet updates (10ms for smooth movement)
         Application.AddTimeout(TimeSpan.FromMilliseconds(10), () =>
         {
-            if (_mapDrawn && !_clearingScreen)
+            if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_introScreen.IsActive)
             {
                 UpdateBullets();
                 DrawFrame();
@@ -246,7 +193,7 @@ public class Game : Window
         // Separate timer for hive animation (75ms for slower color change and better performance)
         Application.AddTimeout(TimeSpan.FromMilliseconds(75), () =>
         {
-            if (_mapDrawn && !_clearingScreen)
+            if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
                 DrawHives();
                 DrawStatusBar(); // Update status bar periodically
@@ -257,7 +204,7 @@ public class Game : Window
         // Timer for snipe spawning and movement (200ms)
         Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
         {
-            if (_mapDrawn && !_clearingScreen)
+            if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
                 SpawnSnipes();
                 UpdateSnipes();
@@ -272,7 +219,7 @@ public class Game : Window
         // Handle Escape key at Window level to prevent default close behavior
         if (e.KeyCode == KeyCode.Esc)
         {
-            if (_inIntroScreen)
+            if (_introScreen.IsActive)
             {
                 // Exit application from intro screen
                 Application.RequestStop();
@@ -280,216 +227,61 @@ public class Game : Window
             else
             {
                 // Return to intro screen from game
-                _inIntroScreen = true;
-                _bannerScrolling = false;
-                _showMenu = true;
-                _clearingScreen = false;
-                _bannerStartTime = DateTime.Now;
-                // Calculate centered banner position - only if Driver is available
-                if (Application.Driver != null)
-                {
-                    int width = Application.Driver.Cols;
-                    int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
-                    _bannerScrollPosition = (width - bannerWidth) / 2;
-                }
+                _introScreen.Show();
             }
             // Don't process further - this prevents Window's default Escape handling
             return;
         }
-        
+
         // For other keys, let them process normally
     }
-    
+
     private void HandleKeyDown(object? sender, dynamic e)
     {
         // Escape is handled at Application level, so skip it here
-            if (e.KeyCode == KeyCode.Esc)
+        if (e.KeyCode == KeyCode.Esc)
         {
             return;
         }
-        
-        // Handle game over key press
-        if (_waitingForGameOverKey)
+
+        // Handle intro screen key press (including game over)
+        if (_introScreen.HandleKey(e))
         {
-            // Any key press returns to intro screen
-            _gameOver = false;
-            _waitingForGameOverKey = false;
-            _inIntroScreen = true;
-            _bannerScrolling = false;
-            _showMenu = true;
-            _clearingScreen = false;
-            _selectedMenuIndex = 0;
-            _enteringInitials = false;
-            _bannerStartTime = DateTime.Now;
-            if (Application.Driver != null)
-            {
-                int width = Application.Driver.Cols;
-                int bannerWidth = 7 * 7 + 6 * 2;
-                _bannerScrollPosition = (width - bannerWidth) / 2;
-                DrawIntroScreen();
-            }
-            return;
+            return; // Intro screen handled the key
         }
-        
-        // Handle intro screen key press
-        if (_inIntroScreen)
-        {
-            HandleIntroScreenKey(e);
-            return; // Don't process game keys during intro
-        }
-        
-        // Don't process game keys if game is over or waiting for game over key
-        if (_gameOver || _waitingForGameOverKey)
+
+        // Don't process game keys if intro screen is active or game is over
+        if (_introScreen.IsActive || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
         {
             return;
         }
-        
+
         if (Application.Driver == null)
             return;
-            
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
-        int frameWidth = currentWidth;
-        int frameHeight = currentHeight;
 
-        // Get map viewport centered on player position
-        // _player.X, _player.Y represents the top-left corner of the player in world coordinates
-        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-
-        // Calculate top-left corner of player in viewport coordinates
-        // Map.GetMap centers the viewport on (_player.X, _player.Y)
-        // So top-left corner in viewport is at the center of the viewport
-        int topLeftCol = frameWidth / 2;
-        int topLeftRow = frameHeight / 2;
-
-        // Player is 2 columns wide, 3 rows tall
-        // Player currently occupies: columns [topLeftCol, topLeftCol+1], rows [topLeftRow, topLeftRow+1, topLeftRow+2]
-        // That's 6 cells total: (topLeftCol, topLeftRow), (topLeftCol+1, topLeftRow), 
-        //                        (topLeftCol, topLeftRow+1), (topLeftCol+1, topLeftRow+1),
-        //                        (topLeftCol, topLeftRow+2), (topLeftCol+1, topLeftRow+2)
-
-        // Helper function to check if a cell is walkable (space)
-        bool IsWalkable(int row, int col)
-        {
-            if (row < 0 || row >= frameHeight || col < 0 || col >= frameWidth)
-                return false;
-            return map?[row][col] == ' ';
-        }
-
-        // Helper function to check if all 6 cells the player will occupy are walkable
-        bool CanMoveTo(int newTopLeftCol, int newTopLeftRow)
-        {
-            // Check all 6 cells: 2 columns x 3 rows
-            return IsWalkable(newTopLeftRow, newTopLeftCol) &&
-                   IsWalkable(newTopLeftRow, newTopLeftCol + 1) &&
-                   IsWalkable(newTopLeftRow + 1, newTopLeftCol) &&
-                   IsWalkable(newTopLeftRow + 1, newTopLeftCol + 1) &&
-                   IsWalkable(newTopLeftRow + 2, newTopLeftCol) &&
-                   IsWalkable(newTopLeftRow + 2, newTopLeftCol + 1);
-        }
-
-        // Handle movement - check KeyCode for both arrow keys and numeric keypad
-        bool moved = false;
-
+        // Track movement keys for continuous movement
+        // Update key state when movement keys are pressed
         switch (e.KeyCode)
         {
             case KeyCode.D8: // Numeric keypad 8 (Up)
             case KeyCode.CursorUp:
-                // Moving up: new position is (topLeftCol, topLeftRow - 1)
-                if (CanMoveTo(topLeftCol, topLeftRow - 1))
-                {
-                    _player.Y--;
-                    if (_player.Y < 0)
-                        _player.Y = _map.MapHeight;
-                    moved = true;
-                }
-                break;
             case KeyCode.D2: // Numeric keypad 2 (Down)
             case KeyCode.CursorDown:
-                // Moving down: new position is (topLeftCol, topLeftRow + 1)
-                if (CanMoveTo(topLeftCol, topLeftRow + 1))
-                {
-                    _player.Y++;
-                    if (_player.Y > _map.MapHeight)
-                        _player.Y = 0;
-                    moved = true;
-                }
-                break;
             case KeyCode.D4: // Numeric keypad 4 (Left)
             case KeyCode.CursorLeft:
-                // Moving left: new position is (topLeftCol - 1, topLeftRow)
-                if (CanMoveTo(topLeftCol - 1, topLeftRow))
-                {
-                    _player.X--;
-                    if (_player.X < 0)
-                        _player.X = _map.MapWidth;
-                    moved = true;
-                }
-                break;
             case KeyCode.D6: // Numeric keypad 6 (Right)
             case KeyCode.CursorRight:
-                // Moving right: new position is (topLeftCol + 1, topLeftRow)
-                if (CanMoveTo(topLeftCol + 1, topLeftRow))
-                {
-                    _player.X++;
-                    if (_player.X > _map.MapWidth)
-                        _player.X = 0;
-                    moved = true;
-                }
-                break;
             case KeyCode.D7: // Numeric keypad 7 (Up-Left diagonal)
-                // Moving up-left: new position is (topLeftCol - 1, topLeftRow - 1)
-                if (CanMoveTo(topLeftCol - 1, topLeftRow - 1))
-                {
-                    _player.X--;
-                    _player.Y--;
-                    if (_player.X < 0)
-                        _player.X = _map.MapWidth;
-                    if (_player.Y < 0)
-                        _player.Y = _map.MapHeight;
-                    moved = true;
-                }
-                break;
             case KeyCode.D9: // Numeric keypad 9 (Up-Right diagonal)
-                // Moving up-right: new position is (topLeftCol + 1, topLeftRow - 1)
-                if (CanMoveTo(topLeftCol + 1, topLeftRow - 1))
-                {
-                    _player.X++;
-                    _player.Y--;
-                    if (_player.X > _map.MapWidth)
-                        _player.X = 0;
-                    if (_player.Y < 0)
-                        _player.Y = _map.MapHeight;
-                    moved = true;
-                }
-                break;
             case KeyCode.D1: // Numeric keypad 1 (Down-Left diagonal)
-                // Moving down-left: new position is (topLeftCol - 1, topLeftRow + 1)
-                if (CanMoveTo(topLeftCol - 1, topLeftRow + 1))
-                {
-                    _player.X--;
-                    _player.Y++;
-                    if (_player.X < 0)
-                        _player.X = _map.MapWidth;
-                    if (_player.Y > _map.MapHeight)
-                        _player.Y = 0;
-                    moved = true;
-                }
-                break;
             case KeyCode.D3: // Numeric keypad 3 (Down-Right diagonal)
-                // Moving down-right: new position is (topLeftCol + 1, topLeftRow + 1)
-                if (CanMoveTo(topLeftCol + 1, topLeftRow + 1))
-                {
-                    _player.X++;
-                    _player.Y++;
-                    if (_player.X > _map.MapWidth)
-                        _player.X = 0;
-                    if (_player.Y > _map.MapHeight)
-                        _player.Y = 0;
-                    moved = true;
-                }
+                // Update key state - mark this key as currently pressed
+                _pressedKeys[e.KeyCode] = DateTime.Now;
                 break;
         }
+
+        // Movement will be handled by ProcessPlayerMovement() in the timer
+        bool moved = false;
 
         // Handle bullet firing (q, w, e, a, d, z, x, c)
         // Player is 2 columns wide [X, X+1] and 3 rows tall [Y, Y+1, Y+2]
@@ -565,7 +357,7 @@ public class Game : Window
             // Performance optimization: Only redraw map if player moved to a different cell
             int currentCellX = _player.X;
             int currentCellY = _player.Y;
-            
+
             if (_previousPlayerCellX != currentCellX || _previousPlayerCellY != currentCellY || !_mapDrawn)
             {
                 // Player moved to a different cell - invalidate cache and redraw entire map
@@ -581,6 +373,138 @@ public class Game : Window
                 DrawBullets();
             }
         }
+    }
+
+    private bool ProcessPlayerMovement()
+    {
+        if (Application.Driver == null || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
+            return false;
+
+        // Clean up old key presses (keys not seen recently are considered released)
+        DateTime now = DateTime.Now;
+        var keysToRemove = new List<KeyCode>();
+        foreach (var kvp in _pressedKeys)
+        {
+            if ((now - kvp.Value).TotalMilliseconds > KeyRepeatThresholdMs)
+            {
+                keysToRemove.Add(kvp.Key);
+            }
+        }
+        foreach (var key in keysToRemove)
+        {
+            _pressedKeys.Remove(key);
+        }
+
+        // If no keys are pressed, don't move
+        if (_pressedKeys.Count == 0)
+            return false;
+
+        int currentWidth = Application.Driver.Cols;
+        int currentHeight = Application.Driver.Rows;
+        int frameWidth = currentWidth;
+        int frameHeight = currentHeight;
+
+        // Get map viewport centered on player position
+        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+
+        // Calculate top-left corner of player in viewport coordinates
+        int topLeftCol = frameWidth / 2;
+        int topLeftRow = frameHeight / 2;
+
+        // Helper function to check if a cell is walkable (space)
+        bool IsWalkable(int row, int col)
+        {
+            if (row < 0 || row >= frameHeight || col < 0 || col >= frameWidth)
+                return false;
+            return map?[row][col] == ' ';
+        }
+
+        // Helper function to check if all 6 cells the player will occupy are walkable
+        bool CanMoveTo(int newTopLeftCol, int newTopLeftRow)
+        {
+            return IsWalkable(newTopLeftRow, newTopLeftCol) &&
+                   IsWalkable(newTopLeftRow, newTopLeftCol + 1) &&
+                   IsWalkable(newTopLeftRow + 1, newTopLeftCol) &&
+                   IsWalkable(newTopLeftRow + 1, newTopLeftCol + 1) &&
+                   IsWalkable(newTopLeftRow + 2, newTopLeftCol) &&
+                   IsWalkable(newTopLeftRow + 2, newTopLeftCol + 1);
+        }
+
+        // Determine movement direction based on currently pressed keys
+        int deltaX = 0;
+        int deltaY = 0;
+
+        // Check for cardinal directions (arrow keys and keypad)
+        bool upPressed = _pressedKeys.ContainsKey(KeyCode.CursorUp) || _pressedKeys.ContainsKey(KeyCode.D8);
+        bool downPressed = _pressedKeys.ContainsKey(KeyCode.CursorDown) || _pressedKeys.ContainsKey(KeyCode.D2);
+        bool leftPressed = _pressedKeys.ContainsKey(KeyCode.CursorLeft) || _pressedKeys.ContainsKey(KeyCode.D4);
+        bool rightPressed = _pressedKeys.ContainsKey(KeyCode.CursorRight) || _pressedKeys.ContainsKey(KeyCode.D6);
+
+        // Check for diagonal keypad keys
+        bool upLeftPressed = _pressedKeys.ContainsKey(KeyCode.D7);
+        bool upRightPressed = _pressedKeys.ContainsKey(KeyCode.D9);
+        bool downLeftPressed = _pressedKeys.ContainsKey(KeyCode.D1);
+        bool downRightPressed = _pressedKeys.ContainsKey(KeyCode.D3);
+
+        // Handle diagonal keypad keys (they take priority)
+        if (upLeftPressed)
+        {
+            deltaX = -1;
+            deltaY = -1;
+        }
+        else if (upRightPressed)
+        {
+            deltaX = 1;
+            deltaY = -1;
+        }
+        else if (downLeftPressed)
+        {
+            deltaX = -1;
+            deltaY = 1;
+        }
+        else if (downRightPressed)
+        {
+            deltaX = 1;
+            deltaY = 1;
+        }
+        else
+        {
+            // Handle cardinal directions (can combine for diagonal movement)
+            if (upPressed) deltaY = -1;
+            if (downPressed) deltaY = 1;
+            if (leftPressed) deltaX = -1;
+            if (rightPressed) deltaX = 1;
+        }
+
+        // Try to move if there's a direction
+        if (deltaX != 0 || deltaY != 0)
+        {
+            int newTopLeftCol = topLeftCol + deltaX;
+            int newTopLeftRow = topLeftRow + deltaY;
+
+            if (CanMoveTo(newTopLeftCol, newTopLeftRow))
+            {
+                _player.X += deltaX;
+                _player.Y += deltaY;
+
+                // Handle map wrapping
+                if (_player.X < 0)
+                    _player.X = _map.MapWidth;
+                else if (_player.X > _map.MapWidth)
+                    _player.X = 0;
+
+                if (_player.Y < 0)
+                    _player.Y = _map.MapHeight;
+                else if (_player.Y > _map.MapHeight)
+                    _player.Y = 0;
+
+                // Invalidate cached map since player moved
+                _cachedMapViewport = null;
+                return true; // Player moved
+            }
+        }
+
+        return false; // Player didn't move
     }
 
     private void DrawMapAndPlayer()
@@ -602,7 +526,7 @@ public class Game : Window
         _lastFrameHeight = frameHeight;
 
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-        
+
         // Cache map viewport for reuse in other drawing functions
         _cachedMapViewport = map;
 
@@ -623,7 +547,7 @@ public class Game : Window
         DrawHives();
         DrawSnipes();
         _mapDrawn = true; // Mark that map has been drawn
-        
+
         // Update previous player viewport position
         _previousPlayerViewportX = frameWidth / 2;
         _previousPlayerViewportY = frameHeight / 2;
@@ -631,11 +555,15 @@ public class Game : Window
 
     private void DrawFrame()
     {
+        // Don't draw if in intro screen or game over
+        if (_introScreen.IsActive || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
+            return;
+
         DrawPlayerWithClearing();
         DrawBullets();
         // Hives and snipes are drawn on their own timers for better performance
     }
-    
+
     private void DrawPlayerWithClearing()
     {
         // Clear previous player position before drawing new position
@@ -643,7 +571,7 @@ public class Game : Window
         {
             int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
             int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
-            
+
             if (_previousPlayerViewportX < frameWidth && _previousPlayerViewportY < frameHeight &&
                 _previousPlayerViewportY >= 0 && _previousPlayerViewportY < _cachedMapViewport.Length &&
                 _previousPlayerViewportX >= 0 && _previousPlayerViewportX < _cachedMapViewport[_previousPlayerViewportY].Length)
@@ -668,10 +596,10 @@ public class Game : Window
                 }
             }
         }
-        
+
         // Draw player at new position
         DrawPlayer();
-        
+
         // Update previous viewport position
         int frameWidth2 = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
         int frameHeight2 = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
@@ -692,7 +620,7 @@ public class Game : Window
         for (int i = _bullets.Count - 1; i >= 0; i--)
         {
             var bullet = _bullets[i];
-            
+
             // Check if bullet has expired (older than 2 seconds)
             double ageSeconds = (DateTime.Now - bullet.CreatedAt).TotalSeconds;
             if (ageSeconds >= Bullet.LifetimeSeconds)
@@ -700,26 +628,26 @@ public class Game : Window
                 // Clear the expired bullet from screen before removing
                 int viewportX = (int)Math.Round(bullet.X) - mapOffsetX;
                 int viewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
-                
-                if (viewportX >= 0 && viewportX < frameWidth && 
+
+                if (viewportX >= 0 && viewportX < frameWidth &&
                     viewportY >= 0 && viewportY < frameHeight &&
                     map != null && viewportY >= 0 && viewportY < map.Length &&
                     viewportX >= 0 && viewportX < map[viewportY].Length)
                 {
-        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                    Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
                     Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
                     Application.Driver.AddRune(map[viewportY][viewportX]);
                     Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                 }
-                
+
                 _bullets.RemoveAt(i);
                 continue;
             }
-            
+
             // Store previous position
             double prevX = bullet.X;
             double prevY = bullet.Y;
-            
+
             // Update bullet position (moves every 10ms when this is called)
             bullet.Update();
 
@@ -742,10 +670,10 @@ public class Game : Window
                     // Horizontal walls: ═, ─, ╦, ╩, ╬ (reverse Y)
                     // Vertical walls: ║, │, ╣, ╠ (reverse X)
                     // Corners: ╗, ╝, ╚, ╔ (determine based on approach direction)
-                    
+
                     bool isHorizontalWall = cell == '═' || cell == '─' || cell == '╦' || cell == '╩' || cell == '╬';
                     bool isVerticalWall = cell == '║' || cell == '│' || cell == '╣' || cell == '╠';
-                    
+
                     if (isHorizontalWall)
                     {
                         // Hit a horizontal wall - reverse Y direction
@@ -782,41 +710,41 @@ public class Game : Window
                     bullet.Y = prevY;
                 }
             }
-            
+
             // Check for bullet-snipe collision
             int bulletWorldX = (int)Math.Round(bullet.X);
             int bulletWorldY = (int)Math.Round(bullet.Y);
             bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-            
+
             bool bulletRemoved = false;
-            
+
             for (int j = _snipes.Count - 1; j >= 0; j--)
             {
                 var snipe = _snipes[j];
                 if (!snipe.IsAlive)
                     continue;
-                
+
                 // Check if bullet is at snipe position or arrow position
                 int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                 int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                
+
                 // Check bullet at snipe position
                 if (bulletWorldX == snipeWorldX && bulletWorldY == snipeWorldY)
                 {
                     // Bullet hit snipe - clear both bullet and snipe
                     snipe.IsAlive = false;
-                    
+
                     // Get fresh map to ensure we have correct character for clearing
                     var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-                    
+
                     // Clear snipe first (both '@' and arrow) - uses world coordinates
                     ClearSnipePosition(snipe);
-                    
+
                     // Clear bullet at collision point (use bullet's current position)
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
-                    if (viewportX >= 0 && viewportX < frameWidth && 
+                    if (viewportX >= 0 && viewportX < frameWidth &&
                         viewportY >= 0 && viewportY < frameHeight &&
                         freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                         viewportX >= 0 && viewportX < freshMap[viewportY].Length)
@@ -826,18 +754,18 @@ public class Game : Window
                         Application.Driver.AddRune(freshMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                     }
-                    
+
                     // Also clear bullet's previous position if different
                     int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                     int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
                     prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                     prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
+
                     if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                     {
                         int prevViewportX = prevBulletWorldX - mapOffsetX;
                         int prevViewportY = prevBulletWorldY - mapOffsetY;
-                        if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                        if (prevViewportX >= 0 && prevViewportX < frameWidth &&
                             prevViewportY >= 0 && prevViewportY < frameHeight &&
                             freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                             prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
@@ -848,10 +776,10 @@ public class Game : Window
                             Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                         }
                     }
-                    
+
                     // Invalidate cached map since we're removing entities
                     _cachedMapViewport = null;
-                    
+
                     // Remove from lists AFTER clearing
                     _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
@@ -861,7 +789,7 @@ public class Game : Window
                     bulletRemoved = true;
                     break; // Bullet is removed, exit snipe loop
                 }
-                
+
                 // Check bullet at arrow position
                 int arrowWorldX = snipeWorldX + (snipe.DirectionX < 0 ? -1 : 1);
                 arrowWorldX = (arrowWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
@@ -869,17 +797,17 @@ public class Game : Window
                 {
                     // Bullet hit snipe arrow - clear both bullet and snipe
                     snipe.IsAlive = false;
-                    
+
                     // Get fresh map to ensure we have correct character for clearing
                     var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-                    
+
                     // Clear snipe first (both '@' and arrow) - uses world coordinates
                     ClearSnipePosition(snipe);
-                    
+
                     // Clear bullet at collision point
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
-                    if (viewportX >= 0 && viewportX < frameWidth && 
+                    if (viewportX >= 0 && viewportX < frameWidth &&
                         viewportY >= 0 && viewportY < frameHeight &&
                         freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                         viewportX >= 0 && viewportX < freshMap[viewportY].Length)
@@ -889,18 +817,18 @@ public class Game : Window
                         Application.Driver.AddRune(freshMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                     }
-                    
+
                     // Also clear bullet's previous position if different
                     int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                     int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
                     prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                     prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
+
                     if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                     {
                         int prevViewportX = prevBulletWorldX - mapOffsetX;
                         int prevViewportY = prevBulletWorldY - mapOffsetY;
-                        if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                        if (prevViewportX >= 0 && prevViewportX < frameWidth &&
                             prevViewportY >= 0 && prevViewportY < frameHeight &&
                             freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                             prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
@@ -911,10 +839,10 @@ public class Game : Window
                             Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                         }
                     }
-                    
+
                     // Invalidate cached map since we're removing entities
                     _cachedMapViewport = null;
-                    
+
                     // Remove from lists AFTER clearing
                     _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
@@ -925,7 +853,7 @@ public class Game : Window
                     break; // Bullet is removed, exit snipe loop
                 }
             }
-            
+
             // Check for bullet-hive collision (only if bullet still exists)
             if (!bulletRemoved)
             {
@@ -933,39 +861,39 @@ public class Game : Window
                 bulletWorldY = (int)Math.Round(bullet.Y);
                 bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                 bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                
+
                 foreach (var hive in _hives)
                 {
                     if (hive.IsDestroyed)
                         continue;
-                    
+
                     // Check if bullet is within hive bounds (2x2 area)
                     // Hive occupies: [X, X+1] columns, [Y, Y+1] rows
                     int hiveWorldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                     int hiveWorldY = (hive.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
                     int hiveWorldX2 = (hiveWorldX + 1) % _map.MapWidth;
                     int hiveWorldY2 = (hiveWorldY + 1) % _map.MapHeight;
-                    
+
                     // Check if bullet is within the 2x2 hive area
                     bool inHiveX = (bulletWorldX == hiveWorldX || bulletWorldX == hiveWorldX2);
                     bool inHiveY = (bulletWorldY == hiveWorldY || bulletWorldY == hiveWorldY2);
-                    
+
                     if (inHiveX && inHiveY)
                     {
                         // Bullet hit hive
                         hive.Hits++;
-                        
+
                         // Reduce flash rate by 1/3 (for this hive only)
                         hive.FlashIntervalMs = (int)(hive.FlashIntervalMs * 2.0 / 3.0);
                         if (hive.FlashIntervalMs < 10) hive.FlashIntervalMs = 10; // Minimum 10ms
-                        
+
                         // Get fresh map to ensure we have correct character for clearing
                         var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-                        
+
                         // Clear bullet at collision point
                         int viewportX = bulletWorldX - mapOffsetX;
                         int viewportY = bulletWorldY - mapOffsetY;
-                        if (viewportX >= 0 && viewportX < frameWidth && 
+                        if (viewportX >= 0 && viewportX < frameWidth &&
                             viewportY >= 0 && viewportY < frameHeight &&
                             freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                             viewportX >= 0 && viewportX < freshMap[viewportY].Length)
@@ -975,18 +903,18 @@ public class Game : Window
                             Application.Driver.AddRune(freshMap[viewportY][viewportX]);
                             Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                         }
-                        
+
                         // Also clear bullet's previous position if different
                         int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                         int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
                         prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                         prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                        
+
                         if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                         {
                             int prevViewportX = prevBulletWorldX - mapOffsetX;
                             int prevViewportY = prevBulletWorldY - mapOffsetY;
-                            if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                            if (prevViewportX >= 0 && prevViewportX < frameWidth &&
                                 prevViewportY >= 0 && prevViewportY < frameHeight &&
                                 freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                                 prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
@@ -997,35 +925,35 @@ public class Game : Window
                                 Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                             }
                         }
-                        
+
                         // Invalidate cached map since we're removing a bullet
                         _cachedMapViewport = null;
-                        
+
                         _bullets.RemoveAt(i);
                         bulletRemoved = true;
-                        
+
                         // Check if hive is destroyed (3 hits)
                         if (hive.Hits >= Hive.HitsToDestroy)
                         {
                             hive.IsDestroyed = true;
                             _gameState.HivesUndestroyed--;
-                            
+
                             // Clear hive from screen immediately
                             ClearHivePosition(hive);
-                            
+
                             // Kill all unreleased snipes from this hive
                             int unreleasedSnipes = hive.SnipesRemaining;
-                            
+
                             // Add score: 500 for hive + 25 per unreleased snipe
                             int hiveScore = 500 + (unreleasedSnipes * 25);
                             _gameState.Score += hiveScore;
                             _player.Score += hiveScore;
-                            
+
                             // Update total snipes count (unreleased snipes are now gone)
                             _gameState.SnipesUndestroyed -= unreleasedSnipes;
                             _gameState.TotalSnipes -= unreleasedSnipes;
                         }
-                        
+
                         break; // Bullet is removed, exit hive loop
                     }
                 }
@@ -1067,12 +995,12 @@ public class Game : Window
             int prevViewportY = (int)Math.Round(bullet.PreviousY) - mapOffsetY;
 
             // Only clear if within viewport and different from current position
-            if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+            if (prevViewportX >= 0 && prevViewportX < frameWidth &&
                 prevViewportY >= 0 && prevViewportY < frameHeight)
             {
                 int currentViewportX = (int)Math.Round(bullet.X) - mapOffsetX;
                 int currentViewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
-                
+
                 // Only clear if position actually changed
                 if (prevViewportX != currentViewportX || prevViewportY != currentViewportY)
                 {
@@ -1093,7 +1021,7 @@ public class Game : Window
         {
             _cachedDateTime = DateTime.Now;
         }
-        
+
         // Flash between bright red and red based on time
         bool isBright = (_cachedDateTime.Millisecond / 250) % 2 == 0;
         var bulletColor = isBright ? Color.BrightRed : Color.Red;
@@ -1107,7 +1035,7 @@ public class Game : Window
             int viewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
 
             // Only draw if within viewport (offset by StatusBarHeight)
-            if (viewportX >= 0 && viewportX < frameWidth && 
+            if (viewportX >= 0 && viewportX < frameWidth &&
                 viewportY >= 0 && viewportY < frameHeight)
             {
                 Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
@@ -1137,7 +1065,7 @@ public class Game : Window
         {
             _cachedDateTime = DateTime.Now;
         }
-        
+
         long totalMs = _cachedDateTime.Ticks / TimeSpan.TicksPerMillisecond;
 
         // Pre-calculate viewport bounds for early exit optimization
@@ -1150,7 +1078,7 @@ public class Game : Window
         {
             if (hive.IsDestroyed)
                 continue;
-            
+
             // Each hive has its own flash interval (reduced by 1/3 each hit)
             // Flash between cyan and green based on time
             bool isCyan = (totalMs / hive.FlashIntervalMs) % 2 == 0;
@@ -1161,27 +1089,27 @@ public class Game : Window
             // The viewport is centered on the player at (frameWidth/2, frameHeight/2)
             // Map.GetMap centers on (_player.X, _player.Y), so we need to calculate
             // the relative position of the hive from the player, accounting for wrapping
-            
+
             // Calculate the difference in world coordinates
             int deltaX = hive.X - _player.X;
             int deltaY = hive.Y - _player.Y;
-            
+
             // Handle wrapping: find the shortest path (accounting for wrap)
             // If the difference is more than half the map size, wrap around
             if (deltaX > _map.MapWidth / 2)
                 deltaX -= _map.MapWidth;
             else if (deltaX < -_map.MapWidth / 2)
                 deltaX += _map.MapWidth;
-                
+
             if (deltaY > _map.MapHeight / 2)
                 deltaY -= _map.MapHeight;
             else if (deltaY < -_map.MapHeight / 2)
                 deltaY += _map.MapHeight;
-            
+
             // Convert to viewport coordinates (viewport center is at frameWidth/2, frameHeight/2)
             int hiveViewportX = (frameWidth / 2) + deltaX;
             int hiveViewportY = (frameHeight / 2) + deltaY;
-            
+
             // Check if any part of the 2x2 hive is visible in viewport
             if (hiveViewportX + 1 < minViewportX || hiveViewportX > maxViewportX ||
                 hiveViewportY + 1 < minViewportY || hiveViewportY > maxViewportY)
@@ -1192,7 +1120,7 @@ public class Game : Window
             // Hive is a 2x2 box with corner characters: ╔ ╗ ╚ ╝
             // Only draw corners that are within the viewport bounds (offset by StatusBarHeight)
             // Top-left corner
-            if (hiveViewportX >= 0 && hiveViewportX < frameWidth && 
+            if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
                 hiveViewportY >= 0 && hiveViewportY < frameHeight)
             {
                 Application.Driver.Move(hiveViewportX, hiveViewportY + StatusBarHeight);
@@ -1201,7 +1129,7 @@ public class Game : Window
 
             // Top-right corner
             int topRightX = hiveViewportX + 1;
-            if (topRightX >= 0 && topRightX < frameWidth && 
+            if (topRightX >= 0 && topRightX < frameWidth &&
                 hiveViewportY >= 0 && hiveViewportY < frameHeight)
             {
                 Application.Driver.Move(topRightX, hiveViewportY + StatusBarHeight);
@@ -1210,7 +1138,7 @@ public class Game : Window
 
             // Bottom-left corner
             int bottomLeftY = hiveViewportY + 1;
-            if (hiveViewportX >= 0 && hiveViewportX < frameWidth && 
+            if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
                 bottomLeftY >= 0 && bottomLeftY < frameHeight)
             {
                 Application.Driver.Move(hiveViewportX, bottomLeftY + StatusBarHeight);
@@ -1218,7 +1146,7 @@ public class Game : Window
             }
 
             // Bottom-right corner
-            if (topRightX >= 0 && topRightX < frameWidth && 
+            if (topRightX >= 0 && topRightX < frameWidth &&
                 bottomLeftY >= 0 && bottomLeftY < frameHeight)
             {
                 Application.Driver.Move(topRightX, bottomLeftY + StatusBarHeight);
@@ -1244,14 +1172,14 @@ public class Game : Window
                 int snipeX = hive.X + 1; // Center of hive
                 int snipeY = hive.Y + 1;
                 char snipeType = hive.GetNextSnipeType();
-                
+
                 var snipe = new Snipe(snipeX, snipeY, snipeType);
-                
+
                 // Give snipe a random initial direction
                 int[] directions = new int[] { -1, 0, 1 };
                 snipe.DirectionX = directions[_random.Next(3)];
                 snipe.DirectionY = directions[_random.Next(3)];
-                
+
                 // Ensure snipe has some direction (not both 0)
                 if (snipe.DirectionX == 0 && snipe.DirectionY == 0)
                 {
@@ -1260,7 +1188,7 @@ public class Game : Window
                     else
                         snipe.DirectionY = _random.Next(2) == 0 ? -1 : 1;
                 }
-                
+
                 _snipes.Add(snipe);
                 hive.SpawnSnipe();
             }
@@ -1272,29 +1200,29 @@ public class Game : Window
         // Check if snipe position (x, y) is valid (not a wall)
         int wrappedX = (x % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
         int wrappedY = (y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-        
+
         if (wrappedY < 0 || wrappedY >= _map.MapHeight || wrappedX < 0 || wrappedX >= _map.MapWidth)
             return false;
-        
+
         if (_map.FullMap[wrappedY][wrappedX] != ' ')
             return false;
-        
+
         // Check if arrow position is also valid
         // Arrow position depends on direction:
         // Moving left (dirX < 0): arrow is at (x - 1, y)
         // Moving right or other: arrow is at (x + 1, y)
         int arrowX = dirX < 0 ? x - 1 : x + 1;
         int arrowY = y;
-        
+
         int wrappedArrowX = (arrowX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
         int wrappedArrowY = (arrowY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-        
+
         if (wrappedArrowY < 0 || wrappedArrowY >= _map.MapHeight || wrappedArrowX < 0 || wrappedArrowX >= _map.MapWidth)
             return false;
-        
+
         if (_map.FullMap[wrappedArrowY][wrappedArrowX] != ' ')
             return false;
-        
+
         return true;
     }
 
@@ -1305,21 +1233,21 @@ public class Game : Window
         int y1 = (snipe1.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
         int x2 = (snipe2.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
         int y2 = (snipe2.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-        
+
         // Arrow position depends on direction:
         // Moving left (DirectionX < 0): arrow is at (x - 1, y)
         // Moving right or other: arrow is at (x + 1, y)
         int arrow1X = snipe1.DirectionX < 0 ? (x1 - 1 + _map.MapWidth) % _map.MapWidth : (x1 + 1) % _map.MapWidth;
         int arrow2X = snipe2.DirectionX < 0 ? (x2 - 1 + _map.MapWidth) % _map.MapWidth : (x2 + 1) % _map.MapWidth;
-        
+
         // Check if snipe1's position overlaps with snipe2's position or arrow
         if ((x1 == x2 && y1 == y2) || (x1 == arrow2X && y1 == y2))
             return true;
-        
+
         // Check if snipe1's arrow overlaps with snipe2's position or arrow
         if ((arrow1X == x2 && y1 == y2) || (arrow1X == arrow2X && y1 == y2))
             return true;
-        
+
         return false;
     }
 
@@ -1328,7 +1256,7 @@ public class Game : Window
         for (int i = _snipes.Count - 1; i >= 0; i--)
         {
             var snipe = _snipes[i];
-            
+
             if (!snipe.IsAlive)
             {
                 // Clear snipe from screen before removing
@@ -1360,7 +1288,7 @@ public class Game : Window
 
             // Calculate distance (Manhattan distance for simplicity)
             int distanceToPlayer = Math.Abs(deltaX) + Math.Abs(deltaY);
-            
+
             // Heat radius: closer = more attracted, further = less attracted
             // Use a maximum radius (e.g., 20 cells) - beyond this, movement is mostly random
             const int maxHeatRadius = 20;
@@ -1391,7 +1319,7 @@ public class Game : Window
 
             // Get all possible valid directions
             List<(int dx, int dy)> possibleDirections = new List<(int, int)>();
-            
+
             // Try all 8 possible directions (including diagonals)
             for (int dx = -1; dx <= 1; dx++)
             {
@@ -1399,17 +1327,17 @@ public class Game : Window
                 {
                     if (dx == 0 && dy == 0)
                         continue; // Skip no movement
-                    
+
                     int testX = snipe.X + dx;
                     int testY = snipe.Y + dy;
-                    
+
                     if (IsSnipePositionValid(testX, testY, dx, dy))
                     {
                         possibleDirections.Add((dx, dy));
                     }
                 }
             }
-            
+
             if (possibleDirections.Count == 0)
             {
                 // Can't move in any direction - stay in place but keep trying
@@ -1423,7 +1351,7 @@ public class Game : Window
             // 3. If player is close (heat radius), prefer moving toward player
             (int dx, int dy) chosenDirection;
             bool currentDirectionValid = possibleDirections.Contains((snipe.DirectionX, snipe.DirectionY));
-            
+
             if (currentDirectionValid && heatFactor < 0.3)
             {
                 // Current direction is valid and player is far - wander through maze
@@ -1443,7 +1371,7 @@ public class Game : Window
             {
                 // Player is close (heat radius) - prefer moving toward player
                 bool preferredValid = possibleDirections.Contains((preferredDirX, preferredDirY));
-                
+
                 if (preferredValid)
                 {
                     // Prefer moving toward player, but allow continuing current direction if it's also toward player
@@ -1489,7 +1417,7 @@ public class Game : Window
             {
                 if (i == j || !_snipes[j].IsAlive)
                     continue;
-                
+
                 var otherSnipe = _snipes[j];
                 if (CheckSnipeSnipeCollision(snipe, otherSnipe))
                 {
@@ -1498,19 +1426,19 @@ public class Game : Window
                     snipe.DirectionY = -snipe.DirectionY;
                     otherSnipe.DirectionX = -otherSnipe.DirectionX;
                     otherSnipe.DirectionY = -otherSnipe.DirectionY;
-                    
+
                     // Move snipes back to previous positions to avoid overlap
                     snipe.X = snipe.PreviousX;
                     snipe.Y = snipe.PreviousY;
                     otherSnipe.X = otherSnipe.PreviousX;
                     otherSnipe.Y = otherSnipe.PreviousY;
-                    
+
                     // Wrap coordinates
                     snipe.X = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                     snipe.Y = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
                     otherSnipe.X = (otherSnipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                     otherSnipe.Y = (otherSnipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
+
                     break; // Only handle one collision per update
                 }
             }
@@ -1518,7 +1446,7 @@ public class Game : Window
             // Check collision with bullets (snipe moving into bullet)
             int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-            
+
             for (int k = _bullets.Count - 1; k >= 0; k--)
             {
                 var bullet = _bullets[k];
@@ -1526,13 +1454,13 @@ public class Game : Window
                 int bulletWorldY = (int)Math.Round(bullet.Y);
                 bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                 bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                
+
                 // Check if snipe is at bullet position
                 if (snipeWorldX == bulletWorldX && snipeWorldY == bulletWorldY)
                 {
                     // Snipe moved into bullet - clear both bullet and snipe
                     snipe.IsAlive = false;
-                    
+
                     // Get fresh map to ensure we have correct character for clearing
                     int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
                     int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
@@ -1541,7 +1469,7 @@ public class Game : Window
                     int mapOffsetY = _player.Y - (frameHeight / 2);
                     int viewportX = bulletWorldX - mapOffsetX;
                     int viewportY = bulletWorldY - mapOffsetY;
-                    if (viewportX >= 0 && viewportX < frameWidth && 
+                    if (viewportX >= 0 && viewportX < frameWidth &&
                         viewportY >= 0 && viewportY < frameHeight &&
                         bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
                         viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
@@ -1551,12 +1479,12 @@ public class Game : Window
                         Application.Driver.AddRune(bulletMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                     }
-                    
+
                     // Clear snipe first (both '@' and arrow) - uses world coordinates
                     ClearSnipePosition(snipe);
-                    
+
                     // Clear bullet at collision point
-                    if (viewportX >= 0 && viewportX < frameWidth && 
+                    if (viewportX >= 0 && viewportX < frameWidth &&
                         viewportY >= 0 && viewportY < frameHeight &&
                         bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
                         viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
@@ -1566,18 +1494,18 @@ public class Game : Window
                         Application.Driver.AddRune(bulletMap[viewportY][viewportX]);
                         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                     }
-                    
+
                     // Also clear bullet's previous position if different
                     int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                     int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
                     prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                     prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    
+
                     if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                     {
                         int prevViewportX = prevBulletWorldX - mapOffsetX;
                         int prevViewportY = prevBulletWorldY - mapOffsetY;
-                        if (prevViewportX >= 0 && prevViewportX < frameWidth && 
+                        if (prevViewportX >= 0 && prevViewportX < frameWidth &&
                             prevViewportY >= 0 && prevViewportY < frameHeight &&
                             bulletMap != null && prevViewportY >= 0 && prevViewportY < bulletMap.Length &&
                             prevViewportX >= 0 && prevViewportX < bulletMap[prevViewportY].Length)
@@ -1588,10 +1516,10 @@ public class Game : Window
                             Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
                         }
                     }
-                    
+
                     // Invalidate cached map since we're removing entities
                     _cachedMapViewport = null;
-                    
+
                     // Remove from lists AFTER clearing
                     _snipes.RemoveAt(i);
                     _bullets.RemoveAt(k);
@@ -1603,16 +1531,20 @@ public class Game : Window
                 }
             }
 
-            // Check collision with player (only if snipe is still alive)
+            // Check collision with player (only if snipe is still alive and game is not over)
             if (!snipe.IsAlive)
                 goto nextSnipe;
-                
+
+            // Don't check collision if game is over
+            if (_introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
+                goto nextSnipe;
+
             if (CheckSnipePlayerCollision(snipe))
             {
                 // Snipe explodes, player loses a life
                 snipe.IsAlive = false;
                 _player.Lives--;
-                
+
                 if (_player.Lives > 0)
                 {
                     // Respawn player at random position with clearing effect
@@ -1620,27 +1552,17 @@ public class Game : Window
                     _player.X = x;
                     _player.Y = y;
                     // Trigger clearing effect with lives message
-                    _clearingScreen = true;
-                    _clearingStartTime = DateTime.Now;
-                    _clearingRectSize = 0;
-                    _clearingMessage = $"{_player.Lives} Lives Left";
-                    _gameOver = false;
-                    _waitingForGameOverKey = false;
+                    _introScreen.StartClearingEffect($"{_player.Lives} Lives Left");
                 }
                 else
                 {
                     // Game over
                     _player.IsAlive = false;
-                    _gameOver = true;
-                    _clearingScreen = true;
-                    _clearingStartTime = DateTime.Now;
-                    _clearingRectSize = 0;
-                    _clearingMessage = "GAME OVER";
-                    _waitingForGameOverKey = false;
+                    _introScreen.ShowGameOver("GAME OVER");
                 }
             }
-            
-            nextSnipe:; // Label for continue after snipe removal
+
+        nextSnipe:; // Label for continue after snipe removal
         }
     }
 
@@ -1674,16 +1596,16 @@ public class Game : Window
         // This includes both '@' character positions and arrow positions from the last frame
         // We ALWAYS add previous positions, even if snipe hasn't moved (direction might have changed)
         HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>();
-        
+
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
                 continue;
-            
+
             // Get previous world coordinates (wrapped)
             int prevWorldX = (snipe.PreviousX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int prevWorldY = (snipe.PreviousY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-            
+
             // Determine where '@' and arrow were based on previous direction
             // Drawing logic: DirectionX < 0: arrow at center, '@' to right
             //                 DirectionX >= 0: '@' at center, arrow to right
@@ -1700,22 +1622,22 @@ public class Game : Window
                 prevCharWorldX = prevWorldX;
                 prevArrowWorldX = (prevWorldX + 1) % _map.MapWidth;
             }
-            
+
             // Always add both positions to clear list
             positionsToClear.Add((prevCharWorldX, prevWorldY));
             positionsToClear.Add((prevArrowWorldX, prevWorldY));
         }
-        
+
         // Step 2: Build a set of all positions that snipes CURRENTLY occupy
         // Remove these from the positionsToClear set (don't clear positions that are still occupied)
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
                 continue;
-            
+
             int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-            
+
             // Calculate current '@' and arrow positions based on current direction
             // Drawing logic: DirectionX < 0: arrow at center, '@' to right
             //                 DirectionX >= 0: '@' at center, arrow to right
@@ -1735,7 +1657,7 @@ public class Game : Window
             positionsToClear.Remove((charWorldX, snipeWorldY));
             positionsToClear.Remove((arrowWorldX, snipeWorldY));
         }
-        
+
         // Step 3: Clear all positions that remain in positionsToClear (no longer occupied)
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
         foreach (var (worldX, worldY) in positionsToClear)
@@ -1743,24 +1665,24 @@ public class Game : Window
             // Calculate viewport coordinates
             int deltaX = worldX - _player.X;
             int deltaY = worldY - _player.Y;
-            
+
             // Handle wrapping
             if (deltaX > _map.MapWidth / 2)
                 deltaX -= _map.MapWidth;
             else if (deltaX < -_map.MapWidth / 2)
                 deltaX += _map.MapWidth;
-            
+
             if (deltaY > _map.MapHeight / 2)
                 deltaY -= _map.MapHeight;
             else if (deltaY < -_map.MapHeight / 2)
                 deltaY += _map.MapHeight;
-            
+
             int viewportX = (frameWidth / 2) + deltaX;
             int viewportY = (frameHeight / 2) + deltaY;
-            
-            if (viewportX >= 0 && viewportX < frameWidth && 
+
+            if (viewportX >= 0 && viewportX < frameWidth &&
                 viewportY >= 0 && viewportY < frameHeight &&
-                worldY >= 0 && worldY < _map.MapHeight && 
+                worldY >= 0 && worldY < _map.MapHeight &&
                 worldX >= 0 && worldX < _map.MapWidth)
             {
                 char mapChar = _map.FullMap[worldY][worldX];
@@ -1768,7 +1690,7 @@ public class Game : Window
                 Application.Driver.AddRune(mapChar);
             }
         }
-        
+
         // Step 4: Draw snipes at their new positions
         foreach (var snipe in _snipes)
         {
@@ -1794,13 +1716,13 @@ public class Game : Window
             int viewportY = (frameHeight / 2) + deltaY;
 
             // Only draw if within viewport
-            if (viewportX >= 0 && viewportX < frameWidth && 
+            if (viewportX >= 0 && viewportX < frameWidth &&
                 viewportY >= 0 && viewportY < frameHeight)
             {
                 // Set color based on snipe type: 'A' = magenta, 'B' = green
                 var snipeColor = snipe.Type == 'A' ? Color.Magenta : Color.Green;
                 Application.Driver.SetAttribute(new Terminal.Gui.Attribute(snipeColor, Color.Black));
-                
+
                 // Draw order depends on direction:
                 // Moving left: arrow first, then character
                 // Moving right or other: character first, then arrow
@@ -1809,7 +1731,7 @@ public class Game : Window
                     // Moving left - draw arrow first, then character
                     Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
                     Application.Driver.AddRune(snipe.GetDirectionArrow());
-                    
+
                     if (viewportX + 1 < frameWidth)
                     {
                         Application.Driver.Move(viewportX + 1, viewportY + StatusBarHeight);
@@ -1821,7 +1743,7 @@ public class Game : Window
                     // Moving right or other directions - draw character first, then arrow
                     Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
                     Application.Driver.AddRune(snipe.GetDisplayChar());
-                    
+
                     if (viewportX + 1 < frameWidth)
                     {
                         Application.Driver.Move(viewportX + 1, viewportY + StatusBarHeight);
@@ -1832,14 +1754,14 @@ public class Game : Window
         }
 
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-        
+
         // CRITICAL: Update PreviousX/PreviousY to match what was actually drawn
         // This ensures that on the next frame, we clear the correct positions
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
                 continue;
-            
+
             // Update previous position to current position (what was just drawn)
             snipe.PreviousX = snipe.X;
             snipe.PreviousY = snipe.Y;
@@ -1848,709 +1770,35 @@ public class Game : Window
         }
     }
 
-    private void DrawIntroScreen()
+    // Callback for IntroScreen to get map character at position during clearing effect
+    private char GetMapCharAtPosition(int x, int y)
     {
-        if (Application.Driver == null)
-            return;
-            
-        int width = Application.Driver.Cols;
-        int height = Application.Driver.Rows;
-        
-        if (_waitingForGameOverKey)
+        if (_map == null)
+            return ' ';
+
+        int frameWidth = Application.Driver?.Cols ?? 80;
+        int frameHeight = (Application.Driver?.Rows ?? 24) - StatusBarHeight;
+
+        // Get map viewport
+        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+
+        if (y >= 0 && y < frameHeight && x >= 0 && x < frameWidth && map != null && y < map.Length && x < map[y].Length)
         {
-            // Draw game over screen
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    Application.Driver.Move(x, y);
-                    Application.Driver.AddRune('*');
-                }
-            }
-            // Draw GAME OVER message
-            if (!string.IsNullOrEmpty(_clearingMessage))
-            {
-                int messageX = (width - _clearingMessage.Length) / 2;
-                int messageY = height / 2;
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-                Application.Driver.Move(messageX, messageY);
-                Application.Driver.AddStr(_clearingMessage);
-            }
-            return;
+            return map[y][x];
         }
-        
-        if (_clearingScreen)
-        {
-            DrawClearingEffect(width, height);
-            return;
-        }
-        
-        // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        for (int y = 0; y < height; y++)
-        {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
-        }
-        
-        if (_bannerScrolling)
-        {
-            // Animate banner scrolling in from left
-            double elapsedSeconds = (DateTime.Now - _bannerStartTime).TotalSeconds;
-            int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
-            int targetX = (width - bannerWidth) / 2; // Center position
-            int startX = -bannerWidth; // Start completely off screen to the left
-            
-            if (elapsedSeconds >= 2.0)
-            {
-                // Animation complete, center the banner
-                _bannerScrollPosition = targetX;
-                _bannerScrolling = false;
-                _showMenu = true;
-            }
-            else
-            {
-                // Calculate scroll position (ease-in-out)
-                double progress = elapsedSeconds / 2.0;
-                // Simple ease-in-out: smooth start and end
-                progress = progress * progress * (3.0 - 2.0 * progress);
-                // Interpolate from startX (off-screen left) to targetX (centered)
-                _bannerScrollPosition = (int)(startX + (targetX - startX) * progress);
-            }
-            
-            DrawBanner(_bannerScrollPosition, height);
-        }
-        else
-        {
-            // Banner is centered, draw it and show press key message
-            int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
-            int bannerX = (width - bannerWidth) / 2;
-            DrawBanner(bannerX, height);
-            
-            if (_showMenu)
-            {
-                DrawMenu(width, height);
-            }
-        }
+
+        return ' ';
     }
-    
-    private void HandleIntroScreenKey(dynamic e)
-    {
-        if (_enteringInitials)
-        {
-            HandleInitialsInput(e);
-            return;
-        }
-        
-        if (!_showMenu || _clearingScreen)
-            return;
-        
-        // Handle menu navigation
-        switch (e.KeyCode)
-        {
-            case KeyCode.CursorUp:
-            case KeyCode.D8: // Numeric keypad 8
-                _selectedMenuIndex = (_selectedMenuIndex - 1 + _menuItems.Length) % _menuItems.Length;
-                break;
-                
-            case KeyCode.CursorDown:
-            case KeyCode.D2: // Numeric keypad 2
-                _selectedMenuIndex = (_selectedMenuIndex + 1) % _menuItems.Length;
-                break;
-                
-            case KeyCode.Enter:
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.S:
-                _selectedMenuIndex = 0;
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.J:
-                _selectedMenuIndex = 1;
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.I:
-                _selectedMenuIndex = 2;
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.E:
-            case KeyCode.X:
-                _selectedMenuIndex = 3;
-                HandleMenuSelection();
-                break;
-        }
-    }
-    
-    private void HandleMenuSelection()
-    {
-        switch (_selectedMenuIndex)
-        {
-            case 0: // Start a New Game
-                _clearingScreen = true;
-                _clearingStartTime = DateTime.Now;
-                _clearingRectSize = 0;
-                _clearingMessage = $"Level {_gameState.Level}";
-                _gameOver = false;
-                _waitingForGameOverKey = false;
-                break;
-                
-            case 1: // Join an Existing Game
-                // Do nothing for now
-                break;
-                
-            case 2: // Initials
-                _enteringInitials = true;
-                _initialsInput = "";
-                break;
-                
-            case 3: // Exit
-                Application.RequestStop();
-                break;
-        }
-    }
-    
-    private void HandleInitialsInput(dynamic e)
-    {
-        // Handle backspace
-        if (e.KeyCode == KeyCode.Backspace)
-        {
-            if (_initialsInput.Length > 0)
-            {
-                _initialsInput = _initialsInput.Substring(0, _initialsInput.Length - 1);
-            }
-            return;
-        }
-        
-        // Handle Escape to cancel
-        if (e.KeyCode == KeyCode.Esc)
-        {
-            _enteringInitials = false;
-            _initialsInput = "";
-            return;
-        }
-        
-        // Get character from key
-        char? ch = GetCharFromKey(e);
-        if (ch == null)
-            return;
-        
-        // Validate character (A-Z, 0-9)
-        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
-        {
-            // Convert to uppercase
-            char upperChar = char.ToUpper(ch.Value);
-            
-            if (_initialsInput.Length < 2)
-            {
-                _initialsInput += upperChar;
-                
-                // If we have 2 characters, save and exit input mode
-                if (_initialsInput.Length == 2)
-                {
-                    _config.Initials = _initialsInput;
-                    _config.Save();
-                    _player.Initials = _initialsInput;
-                    _enteringInitials = false;
-                    // Redraw menu immediately to show initials in cyan
-                    if (Application.Driver != null && _inIntroScreen && _showMenu)
-                    {
-                        DrawIntroScreen();
-                    }
-                }
-            }
-        }
-    }
-    
-    private char? GetCharFromKey(dynamic e)
-    {
-        // Try to get character from KeyEvent
-        try
-        {
-            if (e.KeyEvent != null && e.KeyEvent.Key != null)
-            {
-                int keyValue = (int)e.KeyEvent.Key;
-                if (keyValue >= 32 && keyValue <= 126) // Printable ASCII
-                {
-                    return (char)keyValue;
-                }
-            }
-        }
-        catch
-        {
-            // Fall through to alternative method
-        }
-        
-        // Alternative: check KeyCode for letter keys
-        try
-        {
-            if (e.KeyCode >= KeyCode.A && e.KeyCode <= KeyCode.Z)
-            {
-                return (char)('A' + ((int)e.KeyCode - (int)KeyCode.A));
-            }
-            if (e.KeyCode >= KeyCode.D0 && e.KeyCode <= KeyCode.D9)
-            {
-                return (char)('0' + ((int)e.KeyCode - (int)KeyCode.D0));
-            }
-        }
-        catch
-        {
-        }
-        
-        return null;
-    }
-    
-    private void DrawMenu(int width, int height)
-    {
-        if (Application.Driver == null)
-            return;
-        
-        // Calculate menu position (centered below banner, with clear separation)
-        int bannerEndY = height / 4 + 9; // Banner ends at 1/4 + 9 rows
-        int menuBoxHeight = _menuItems.Length + 3; // Items + title + borders + gap
-        int menuStartY = bannerEndY + 5; // 5 rows gap after banner
-        
-        // Calculate box dimensions
-        int boxWidth = 40; // Fixed width for menu box
-        int boxX = (width - boxWidth) / 2; // Center horizontally
-        int boxY = menuStartY;
-        int padding = 2; // Padding from box borders
-        
-        // Draw box border (using single-line characters)
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        
-        // Top border with title
-        Application.Driver.Move(boxX, boxY);
-        Application.Driver.AddRune('┌');
-        // Draw horizontal line with title
-        string title = " Options ";
-        int titleStartX = boxX + (boxWidth - title.Length) / 2;
-        for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
-        {
-            Application.Driver.Move(x, boxY);
-            if (x >= titleStartX && x < titleStartX + title.Length)
-            {
-                Application.Driver.AddRune(title[x - titleStartX]);
-            }
-            else
-            {
-                Application.Driver.AddRune('─');
-            }
-        }
-        Application.Driver.Move(boxX + boxWidth - 1, boxY);
-        Application.Driver.AddRune('┐');
-        
-        // Calculate actual menu items (with gap between Initials and Exit)
-        // 4 items + 1 gap = 5 rows for items, plus 1 for top border = 6 total rows
-        int menuItemCount = _menuItems.Length + 1; // +1 for gap
-        
-        // Draw menu items
-        int itemIndex = 0;
-        for (int i = 0; i < _menuItems.Length; i++)
-        {
-            string menuText = _menuItems[i];
-            
-            // Special handling for Initials option
-            string initialsPart = "";
-            if (i == 2) // Initials option
-            {
-                if (_enteringInitials)
-                {
-                    // Show input field with caret
-                    menuText = "Initials ";
-                    if (_initialsInput.Length == 0)
-                    {
-                        initialsPart = "▊_"; // Caret at first position
-                    }
-                    else if (_initialsInput.Length == 1)
-                    {
-                        initialsPart = _initialsInput + "▊"; // Caret at second position
-                    }
-                    else
-                    {
-                        initialsPart = _initialsInput; // Both characters entered, no caret
-                    }
-                }
-                else
-                {
-                    // Show current initials in Cyan
-                    menuText = "Initials ";
-                    initialsPart = _config.Initials;
-                }
-            }
-            
-            int menuX = boxX + padding;
-            int menuY = boxY + 1 + itemIndex; // +1 for top border
-            
-            // Set colors based on selection
-            if (i == _selectedMenuIndex)
-            {
-                // Selected: white background, blue text - fill entire box width
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.White));
-                // Fill the entire line width (minus borders)
-                for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
-                {
-                    Application.Driver.Move(x, menuY);
-                    Application.Driver.AddRune(' ');
-                }
-            }
-            else
-            {
-                // Not selected: white text, blue background
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-            }
-            
-            // Draw menu text character by character (left-justified with padding)
-            // Highlight first letter in yellow
-            Application.Driver.Move(menuX, menuY);
-            bool firstLetterDrawn = false;
-            foreach (char c in menuText)
-            {
-                if (!firstLetterDrawn && char.IsLetter(c))
-                {
-                    // First letter - draw in yellow
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                    Application.Driver.AddRune(c);
-                    firstLetterDrawn = true;
-                    // Reset to menu color
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                }
-                else
-                {
-                    // Regular character - use current menu color
-                    Application.Driver.AddRune(c);
-                }
-            }
-            
-            // Draw initials part with special color if needed
-            if (i == 2)
-            {
-                if (_enteringInitials)
-                {
-                    // Draw initials input with purple for typed letters
-                    foreach (char c in initialsPart)
-                    {
-                        if (c == '▊')
-                        {
-                            // Caret - use current selection color
-                            Application.Driver.AddRune(c);
-                        }
-                        else if (c == '_')
-                        {
-                            // Placeholder - use current selection color
-                            Application.Driver.AddRune(c);
-                        }
-                        else
-                        {
-                            // Typed letter - use purple
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                            Application.Driver.AddRune(c);
-                            // Reset to menu color
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                        }
-                    }
-                }
-                else
-                {
-                    // Draw initials in Cyan
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                    Application.Driver.AddStr(initialsPart);
-                    // Reset to menu color
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                }
-            }
-            
-            itemIndex++;
-            
-            // Add gap after Initials option (index 2)
-            if (i == 2)
-            {
-                itemIndex++; // Skip a row for gap
-            }
-        }
-        
-        // Left and right borders for each menu item row
-        for (int row = 1; row <= menuItemCount; row++)
-        {
-            int y = boxY + row;
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-            Application.Driver.Move(boxX, y);
-            Application.Driver.AddRune('│');
-            Application.Driver.Move(boxX + boxWidth - 1, y);
-            Application.Driver.AddRune('│');
-        }
-        
-        // Bottom border (after all menu items)
-        int bottomY = boxY + menuItemCount + 1;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(boxX, bottomY);
-        Application.Driver.AddRune('└');
-        for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
-        {
-            Application.Driver.Move(x, bottomY);
-            Application.Driver.AddRune('─');
-        }
-        Application.Driver.Move(boxX + boxWidth - 1, bottomY);
-        Application.Driver.AddRune('┘');
-    }
-    
-    private void DrawBanner(int startX, int screenHeight)
-    {
-        if (Application.Driver == null)
-            return;
-            
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        
-        // Banner is 7 rows tall, with 1 blank row above and below
-        // Position banner higher up (about 1/3 from top) to leave room for menu below
-        int bannerStartY = screenHeight / 4; // 1/4 from top instead of center
-        
-        // Draw blank row above
-        if (bannerStartY > 0)
-        {
-            for (int y = 0; y < bannerStartY; y++)
-            {
-                // Already filled with blue background
-            }
-        }
-        
-        // Draw each letter of NSNIPES with 2-column gaps between letters
-        string[][] letters = { BannerN, BannerS, BannerN, BannerI, BannerP, BannerE, BannerS };
-        
-        for (int letterIndex = 0; letterIndex < letters.Length; letterIndex++)
-        {
-            string[] letter = letters[letterIndex];
-            // Each letter is 7 columns wide, with 2 columns gap after each (except last)
-            // Position = startX + (letterIndex * (7 + 2))
-            int letterX = startX + (letterIndex * 9); // 7 for letter + 2 for gap
-            
-            for (int row = 0; row < 7; row++)
-            {
-                int y = bannerStartY + 1 + row; // +1 for blank row above
-                if (y >= 0 && y < screenHeight)
-                {
-                    for (int col = 0; col < 7; col++)
-                    {
-                        int x = letterX + col;
-                        if (x >= 0 && x < Application.Driver.Cols)
-                        {
-                            Application.Driver.Move(x, y);
-                            Application.Driver.AddRune(letter[row][col]);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    private void DrawClearingEffect(int width, int height)
-    {
-        if (Application.Driver == null)
-            return;
-            
-        // Calculate message area size first (if message exists)
-        int messageAreaWidth = 0;
-        int messageAreaHeight = 3; // 1 row for message + 1 above + 1 below
-        int messageX = 0;
-        int messageY = height / 2;
-        string messageWithSpacing = "";
-        
-        if (!string.IsNullOrEmpty(_clearingMessage))
-        {
-            // Add spacing: 2 spaces before and after the message
-            messageWithSpacing = "  " + _clearingMessage + "  ";
-            messageAreaWidth = messageWithSpacing.Length + 4; // Extra padding on sides
-            messageX = (width - messageWithSpacing.Length) / 2;
-        }
-        
-        // Calculate starting size from message area (diagonal distance from center to message area edge)
-        int centerX = width / 2;
-        int centerY = height / 2;
-        int messageAreaStartSize = 0;
-        if (messageAreaWidth > 0)
-        {
-            // Calculate distance from center to the farthest corner of message area
-            int messageAreaHalfWidth = messageAreaWidth / 2;
-            int messageAreaHalfHeight = messageAreaHeight / 2;
-            int maxDistFromCenter = (int)Math.Sqrt(
-                messageAreaHalfWidth * messageAreaHalfWidth + 
-                messageAreaHalfHeight * messageAreaHalfHeight
-            );
-            messageAreaStartSize = maxDistFromCenter + 2; // Add small buffer
-        }
-        
-        // Calculate clearing rectangle size based on elapsed time
-        // Effect should complete in about 1 second
-        double elapsedSeconds = (DateTime.Now - _clearingStartTime).TotalSeconds;
-        double progress = Math.Min(1.0, elapsedSeconds / 1.0);
-        
-        // Calculate rectangle size (grows from message area size to full screen)
-        // Use diagonal distance to ensure rectangle covers entire screen
-        int maxSize = (int)Math.Sqrt(width * width + height * height) / 2 + 10;
-        int newRectSize = messageAreaStartSize + (int)((maxSize - messageAreaStartSize) * progress);
-        
-        // Draw status bar once at the top
-        DrawStatusBar();
-        
-        // Draw expanding rectangle and reveal map underneath
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-        
-        for (int y = StatusBarHeight; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                // Check if this position is in the message area (protect it from asterisks)
-                bool inMessageArea = false;
-                if (messageAreaWidth > 0)
-                {
-                    int messageAreaLeft = messageX - 2; // Extra padding
-                    int messageAreaRight = messageX + messageWithSpacing.Length + 2;
-                    int messageAreaTop = messageY - 1;
-                    int messageAreaBottom = messageY + 1;
-                    if (x >= messageAreaLeft && x < messageAreaRight &&
-                        y >= messageAreaTop && y <= messageAreaBottom)
-                    {
-                        inMessageArea = true;
-                    }
-                }
-                
-                // Calculate distance from center
-                int dx = x - centerX;
-                int dy = (y - StatusBarHeight) - (height - StatusBarHeight) / 2;
-                int distance = (int)Math.Sqrt(dx * dx + dy * dy);
-                
-                if (distance <= newRectSize && !inMessageArea)
-                {
-                    // Inside rectangle but not in message area - draw '*'
-                    Application.Driver.Move(x, y);
-                    Application.Driver.AddRune('*');
-                }
-                else if (!inMessageArea)
-                {
-                    // Outside rectangle and not in message area - draw map/player
-                    DrawMapAndPlayerAtPosition(x, y);
-                }
-                // If in message area, skip drawing here (will draw message below)
-            }
-        }
-        
-        _clearingRectSize = newRectSize;
-        
-        // Draw message centered on screen (if provided) with spacing around it
-        if (!string.IsNullOrEmpty(_clearingMessage) && !string.IsNullOrEmpty(messageWithSpacing))
-        {
-            // Draw blank rows above and below the message (spaces, not asterisks)
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-            
-            // Clear the area around the message (above, message row, below) with spaces
-            for (int rowOffset = -1; rowOffset <= 1; rowOffset++)
-            {
-                int y = messageY + rowOffset;
-                if (y >= StatusBarHeight && y < height)
-                {
-                    // Clear a wider area to ensure message stands out
-                    int clearWidth = messageWithSpacing.Length + 4; // Extra padding
-                    int clearX = (width - clearWidth) / 2;
-                    for (int x = clearX; x < clearX + clearWidth && x < width; x++)
-                    {
-                        Application.Driver.Move(x, y);
-                        Application.Driver.AddRune(' '); // Use spaces, not asterisks
-                    }
-                }
-            }
-            
-            // Draw the message on top
-            Application.Driver.Move(messageX, messageY);
-            Application.Driver.AddStr(messageWithSpacing);
-        }
-        
-        // When rectangle covers entire screen, transition to game or wait for key (game over)
-        if (newRectSize >= maxSize)
-        {
-            if (_gameOver)
-            {
-                // Game over - wait for key press
-                _waitingForGameOverKey = true;
-                _clearingScreen = false; // Stop the animation, but keep showing the screen
-                // Draw final screen with GAME OVER message
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-                for (int y = StatusBarHeight; y < height; y++)
-                {
-                    for (int x = 0; x < width; x++)
-                    {
-                        Application.Driver.Move(x, y);
-                        Application.Driver.AddRune('*');
-                    }
-                }
-                // Draw GAME OVER message
-                if (!string.IsNullOrEmpty(_clearingMessage))
-                {
-                    string gameOverMessageWithSpacing = "  " + _clearingMessage + "  ";
-                    int gameOverMessageX = (width - gameOverMessageWithSpacing.Length) / 2;
-                    int gameOverMessageY = height / 2;
-                    
-                    // Clear area around message
-                    for (int rowOffset = -1; rowOffset <= 1; rowOffset++)
-                    {
-                        int y = gameOverMessageY + rowOffset;
-                        if (y >= StatusBarHeight && y < height)
-                        {
-                            int clearWidth = gameOverMessageWithSpacing.Length + 4;
-                            int clearX = (width - clearWidth) / 2;
-                            for (int x = clearX; x < clearX + clearWidth && x < width; x++)
-                            {
-                                Application.Driver.Move(x, y);
-                                Application.Driver.AddRune(' ');
-                            }
-                        }
-                    }
-                    
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-                    Application.Driver.Move(gameOverMessageX, gameOverMessageY);
-                    Application.Driver.AddStr(gameOverMessageWithSpacing);
-                }
-            }
-            else
-            {
-                // Normal game start or respawn
-                if (_inIntroScreen)
-                {
-                    _inIntroScreen = false;
-                }
-                _clearingScreen = false;
-                // Clear screen by filling with spaces and start game
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-                for (int y = 0; y < height; y++)
-                {
-                    Application.Driver.Move(0, y);
-                    Application.Driver.AddStr(new string(' ', width));
-                }
-                _mapDrawn = false; // Force redraw of map
-            }
-        }
-    }
-    
-    // Reusable clearing effect method (for later use)
-    public void StartClearingEffect()
-    {
-        _clearingScreen = true;
-        _clearingStartTime = DateTime.Now;
-        _clearingRectSize = 0;
-    }
-    
+
     private void DrawMapAndPlayerAtPosition(int x, int y)
     {
         if (Application.Driver == null || _map == null)
             return;
-            
+
         // Calculate which part of the map should be at this position
         int frameWidth = Application.Driver.Cols;
         int frameHeight = Application.Driver.Rows - StatusBarHeight;
-        
+
         if (y < StatusBarHeight)
         {
             // Status bar area - just draw a space (status bar will be drawn separately)
@@ -2559,25 +1807,25 @@ public class Game : Window
             Application.Driver.AddRune(' ');
             return;
         }
-        
+
         // Get map viewport
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-        
+
         int mapY = y - StatusBarHeight;
-        
+
         // Check if player should be drawn here first (player is on top)
         int playerCenterX = frameWidth / 2;
         int playerCenterY = frameHeight / 2;
         int playerTopLeftX = playerCenterX;
         int playerTopLeftY = playerCenterY + StatusBarHeight;
-        
-        if (x >= playerTopLeftX && x < playerTopLeftX + 2 && 
+
+        if (x >= playerTopLeftX && x < playerTopLeftX + 2 &&
             y >= playerTopLeftY && y < playerTopLeftY + 3)
         {
             DrawPlayerAtPosition(x, y, playerTopLeftX, playerTopLeftY);
             return;
         }
-        
+
         // Draw map character
         if (mapY >= 0 && mapY < frameHeight && x >= 0 && x < frameWidth && map != null && mapY < map.Length && x < map[mapY].Length)
         {
@@ -2586,18 +1834,18 @@ public class Game : Window
             Application.Driver.AddRune(map[mapY][x]);
         }
     }
-    
+
     private void DrawPlayerAtPosition(int x, int y, int playerTopLeftX, int playerTopLeftY)
     {
         if (Application.Driver == null)
             return;
-            
+
         int relX = x - playerTopLeftX;
         int relY = y - playerTopLeftY;
-        
+
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.BrightYellow, Color.Black));
         Application.Driver.Move(x, y);
-        
+
         // Player is 2x3: "BD" on first row, "BD" on second row, "BD" on third row
         if (relX == 0 && relY == 0)
             Application.Driver.AddRune('B');
@@ -2640,17 +1888,17 @@ public class Game : Window
         int viewportX = (frameWidth / 2) + deltaX;
         int viewportY = (frameHeight / 2) + deltaY;
 
-        if (viewportX >= 0 && viewportX < frameWidth && 
+        if (viewportX >= 0 && viewportX < frameWidth &&
             viewportY >= 0 && viewportY < frameHeight)
         {
             Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-            
+
             // Clear '@' character and arrow based on direction
             // When moving left (DirectionX < 0): arrow is at viewportX, '@' is at viewportX + 1
             // When moving right or other: '@' is at viewportX, arrow is at viewportX + 1
             int charViewportX; // Where the '@' character is
             int arrowViewportX; // Where the arrow is
-            
+
             if (snipe.DirectionX < 0)
             {
                 // Moving left: arrow first, then '@'
@@ -2663,7 +1911,7 @@ public class Game : Window
                 charViewportX = viewportX;
                 arrowViewportX = viewportX + 1;
             }
-            
+
             // Clear '@' character position
             if (charViewportX >= 0 && charViewportX < frameWidth)
             {
@@ -2672,19 +1920,19 @@ public class Game : Window
                 Application.Driver.Move(charViewportX, viewportY + StatusBarHeight);
                 Application.Driver.AddRune(mapChar);
             }
-            
+
             // Clear arrow position if within viewport
             if (arrowViewportX >= 0 && arrowViewportX < frameWidth)
             {
                 // Calculate world coordinates for arrow position
                 int arrowWorldX = snipe.X + (snipe.DirectionX < 0 ? -1 : 1);
                 int arrowWorldY = snipe.Y;
-                
+
                 // Wrap coordinates
                 arrowWorldX = (arrowWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
                 arrowWorldY = (arrowWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                
-                if (arrowWorldY >= 0 && arrowWorldY < _map.MapHeight && 
+
+                if (arrowWorldY >= 0 && arrowWorldY < _map.MapHeight &&
                     arrowWorldX >= 0 && arrowWorldX < _map.MapWidth)
                 {
                     char arrowMapChar = _map.FullMap[arrowWorldY][arrowWorldX];
@@ -2692,11 +1940,11 @@ public class Game : Window
                     Application.Driver.AddRune(arrowMapChar);
                 }
             }
-            
+
             Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
         }
     }
-    
+
     private void ClearHivePosition(Hive hive)
     {
         if (Application.Driver == null) return;
@@ -2726,9 +1974,9 @@ public class Game : Window
 
         // Clear all 4 corners of the 2x2 hive
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-        
+
         // Top-left corner
-        if (hiveViewportX >= 0 && hiveViewportX < frameWidth && 
+        if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
             hiveViewportY >= 0 && hiveViewportY < frameHeight)
         {
             int worldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
@@ -2740,7 +1988,7 @@ public class Game : Window
 
         // Top-right corner
         int topRightX = hiveViewportX + 1;
-        if (topRightX >= 0 && topRightX < frameWidth && 
+        if (topRightX >= 0 && topRightX < frameWidth &&
             hiveViewportY >= 0 && hiveViewportY < frameHeight)
         {
             int worldX = ((hive.X + 1) % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
@@ -2752,7 +2000,7 @@ public class Game : Window
 
         // Bottom-left corner
         int bottomLeftY = hiveViewportY + 1;
-        if (hiveViewportX >= 0 && hiveViewportX < frameWidth && 
+        if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
             bottomLeftY >= 0 && bottomLeftY < frameHeight)
         {
             int worldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
@@ -2763,7 +2011,7 @@ public class Game : Window
         }
 
         // Bottom-right corner
-        if (topRightX >= 0 && topRightX < frameWidth && 
+        if (topRightX >= 0 && topRightX < frameWidth &&
             bottomLeftY >= 0 && bottomLeftY < frameHeight)
         {
             int worldX = ((hive.X + 1) % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
@@ -2772,7 +2020,7 @@ public class Game : Window
             Application.Driver.Move(topRightX, bottomLeftY + StatusBarHeight);
             Application.Driver.AddRune(mapChar);
         }
-        
+
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
     }
 
@@ -2834,6 +2082,51 @@ public class Game : Window
         }
 
         return true;
+    }
+
+    private void ResetGame()
+    {
+        // Reset player position and state
+        var (x, y) = FindRandomValidPosition();
+        _player.X = x;
+        _player.Y = y;
+        _player.Lives = 5;
+        _player.Score = 0;
+        _player.IsAlive = true;
+        _player.Initials = _config.Initials; // Ensure initials are current
+        
+        // Reset game state
+        _gameState.Level = 1;
+        _gameState.Score = 0;
+        _gameState.TotalHives = 0;
+        _gameState.HivesUndestroyed = 0;
+        _gameState.TotalSnipes = 0;
+        _gameState.SnipesUndestroyed = 0;
+        
+        // Clear all game entities
+        _bullets.Clear();
+        _hives.Clear();
+        _snipes.Clear();
+        
+        // Reinitialize hives for level 1
+        InitializeHives();
+        
+        // Reset drawing state
+        _mapDrawn = false;
+        _pressedKeys.Clear(); // Clear any lingering pressed keys
+        
+        // Reset cached values
+        _cachedMapViewport = null;
+        _cachedDateTime = DateTime.MinValue;
+        _cachedHivesUndestroyed = -1;
+        _cachedSnipesUndestroyed = -1;
+        _cachedLives = -1;
+        _cachedLevel = -1;
+        _cachedScore = -1;
+        _previousPlayerCellX = -1;
+        _previousPlayerCellY = -1;
+        _previousPlayerViewportX = -1;
+        _previousPlayerViewportY = -1;
     }
 
     private void InitializeHives()
@@ -2918,7 +2211,7 @@ public class Game : Window
         // Check that hive doesn't overlap with existing hives
         foreach (var existingHive in _hives)
         {
-            if (x >= existingHive.X - 1 && x <= existingHive.X + 1 && 
+            if (x >= existingHive.X - 1 && x <= existingHive.X + 1 &&
                 y >= existingHive.Y - 1 && y <= existingHive.Y + 1)
             {
                 return false;
@@ -2944,50 +2237,50 @@ public class Game : Window
         }
 
         int currentWidth = Application.Driver.Cols;
-        
+
         // Set status bar color: white text on blue background
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        
+
         // Draw status bar with hive shapes
         Application.Driver.Move(0, 0);
-        
+
         // Draw hive indicator (small box shape) with fixed color (cyan - first hive color)
         // Using fixed color to reduce status bar updates
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
         Application.Driver.AddStr("╔╗"); // Top corners of hive
-        
+
         // Reset to status bar color and position
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
         Application.Driver.AddStr($" {_gameState.HivesUndestroyed}/{_gameState.TotalHives}  ");
-        
+
         // Draw snipes count
         Application.Driver.AddStr($"Snipes: {_gameState.SnipesUndestroyed}/{_gameState.TotalSnipes}  ");
-        
+
         // Draw lives
         Application.Driver.AddStr($"Lives: {_player.Lives}  ");
-        
+
         // Draw level
         Application.Driver.AddStr($"Level: {_gameState.Level}  ");
-        
+
         // Draw score
         Application.Driver.AddStr($"Score: {_gameState.Score}");
-        
+
         // Clear rest of first row
         int currentPos = Application.Driver.Col;
         if (currentPos < currentWidth)
         {
             Application.Driver.AddStr(new string(' ', currentWidth - currentPos));
         }
-        
+
         // Draw second row with bottom of hive
         Application.Driver.Move(0, 1);
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
         Application.Driver.AddStr("╚╝");
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
         Application.Driver.AddStr(new string(' ', currentWidth - 2));
-        
+
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-        
+
         // Cache current values
         _cachedHivesUndestroyed = _gameState.HivesUndestroyed;
         _cachedSnipesUndestroyed = _gameState.SnipesUndestroyed;
@@ -3017,7 +2310,7 @@ public class Game : Window
         {
             _cachedDateTime = DateTime.Now;
         }
-        
+
         var eyes = _cachedDateTime.Millisecond < 500 ? "ÔÔ" : "OO";
         var mouth = _cachedDateTime.Millisecond < 500 ? "◄►" : "◂▸";
 

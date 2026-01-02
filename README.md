@@ -15,12 +15,45 @@ Use the provided `run.sh` script to build and run the game:
 
 ## Gameplay Summary
 
+### Intro Screen and Menu System
+
+**Intro Screen**
+- Animated NSNIPES banner that scrolls in from the left over 2 seconds
+- Menu system with the following options:
+  - **Start a New Game**: Begins a new game with a clearing effect animation
+  - **Join an Existing Game**: Placeholder for future multiplayer functionality
+  - **Initials**: Allows setting 2-character player initials (A-Z, 0-9)
+  - **Exit**: Exits the application
+- Menu navigation:
+  - Arrow keys or numeric keypad (2/8) to navigate
+  - ENTER to select
+  - Keyboard shortcuts: S (Start), J (Join), I (Initials), E/X (Exit)
+- Initials are saved to `nsnipes.json` and persist between game sessions
+- Default initials are "AA" if not set
+
+**Clearing Effects**
+- Animated clearing effect when starting a new game or respawning
+- Expanding rectangle of '*' characters reveals the map underneath
+- Messages displayed during clearing:
+  - "Level 1" when starting a new game
+  - "X Lives Left" when player loses a life (but still has lives remaining)
+  - "GAME OVER" when all lives are lost
+
+**Game Over**
+- When player loses all lives, "GAME OVER" message is displayed
+- Game stops (no movement, bullets, snipes)
+- Press any key to return to the intro screen
+- Game state is fully reset when starting a new game after game over
+
 ### Current Features
 
 **Player**
 - Player starts with 5 lives
-- Player is represented as a 2x3 character sprite (eyes and mouth that animate)
+- Player is represented as a 2x3 character sprite showing:
+  - Animated eyes (◄► / ◂▸) that blink
+  - Player initials (customizable, 2 characters)
 - Player can move in 8 directions (cardinal and diagonal)
+- Smooth continuous movement while keys are held down
 - Player respawns at a random valid position when hit by a snipe
 - Game ends when all lives are lost
 
@@ -29,30 +62,36 @@ Use the provided `run.sh` script to build and run the game:
 - Map fills the entire console window (no border)
 - Collision detection prevents player from walking through walls
 - Player position is tracked by top-left corner of the 2x3 sprite
+- Map viewport is centered on the player
 
 **Hives**
 - Hives are small 2x2 rectangular boxes made of corner characters (╔ ╗ ╚ ╝)
 - Hives glow between cyan and green colors, changing every 75ms
+- Each hive has its own flash rate that decreases by 1/3 each time it's hit (minimum 10ms)
 - At level 1, there are 5 hives randomly placed across the map
 - Hive count increases by 1 every 5 levels
 - Hives spawn snipes over time (each hive starts with 20 snipes: 10 type 'A', 10 type 'B')
 - Hives are positioned randomly but never overlap walls or the player
 - **Hives can be destroyed**: Hives require 3 direct bullet hits to be destroyed
 - When destroyed, all unreleased snipes from that hive are killed, and the player gains 500 points plus 25 points per unreleased snipe
+- Destroyed hives are properly removed from the screen
 
 **Snipes**
 - Two types of snipes: Type 'A' (magenta) and Type 'B' (green)
-- Each snipe displays as a character ('A' or 'B') followed by a direction arrow
+- Each snipe displays as '@' symbol followed by a direction arrow
 - Snipes spawn randomly from hives over time (roughly every 3 seconds per hive)
+- Snipes spawn in random directions from their hive
 - Snipes move intelligently:
   - Maintain their current direction unless they hit a wall, collide with another snipe, or the player gets close
   - Use a "heat radius" system: closer to player = more attracted, further away = more random movement
   - Maximum heat radius is 20 cells - beyond this, snipes move randomly
   - When player is within heat radius, snipes are attracted toward the player
 - Snipes cannot walk through walls
+- When a snipe hits a wall, it randomly chooses a new direction
 - Snipes bounce off each other when they collide (reverse direction)
 - Snipes move every 200ms
 - If a snipe touches the player, the snipe explodes and the player loses 1 life
+- Both the '@' character and arrow are properly cleared when snipes move or are killed
 
 **Bullets**
 - Player can fire bullets in 8 directions using QWEASDZXC keys
@@ -66,22 +105,26 @@ Use the provided `run.sh` script to build and run the game:
 - Bullets are displayed as flashing red '*' characters (alternating bright red and red)
 - Bullets fire from the appropriate player edge/corner based on direction
 - **Bullets can kill snipes**: When a bullet hits a snipe (or snipe moves into bullet), both are removed and player gains 25 points
-- **Bullets can damage hives**: When a bullet hits a hive, the bullet stops and the hive takes 1 hit (3 hits to destroy)
+- **Bullets can damage hives**: When a bullet hits a hive, the bullet stops and is removed, and the hive takes 1 hit (3 hits to destroy)
+- Bullets are properly cleared from the screen when they expire or hit targets
 
 **Status Bar**
 - Two rows at the top of the screen with dark blue background and white text
 - Displays: Hives (remaining/total), Snipes (remaining/total), Lives, Level, and Score
+- Status bar is updated periodically and shows current game state
 
 **Game State**
-- Tracks current level
+- Tracks current level (starts at 1)
 - Tracks player score (25 points per snipe killed, 500 points for hive + 25 per unreleased snipe)
 - Tracks total and remaining hives
 - Tracks total and remaining snipes
+- Game state is fully reset when starting a new game
 
 **Combat System**
 - **Bullet-Snipe Collision**: When a bullet hits a snipe (or snipe moves into bullet), the snipe is killed, bullet is removed, and player gains 25 points
 - **Bullet-Hive Collision**: When a bullet hits a hive, the bullet stops and is removed. Hives require 3 direct hits to be destroyed
 - **Hive Destruction**: When a hive is destroyed (after 3 hits), all unreleased snipes from that hive are killed, and the player gains 500 points plus 25 points per unreleased snipe
+- **Player-Snipe Collision**: When a snipe touches the player, the snipe explodes, player loses 1 life, and player respawns at a random position
 
 ## Controls
 
@@ -107,7 +150,38 @@ Use the provided `run.sh` script to build and run the game:
 - **X**: Fire down
 - **C**: Fire diagonally down-right
 
+### Menu Navigation (Intro Screen)
+- **Arrow Keys** or **Numeric Keypad (2, 8)**: Navigate menu up/down
+- **ENTER**: Select current menu option
+- **S**: Quick select "Start a New Game"
+- **J**: Quick select "Join an Existing Game"
+- **I**: Quick select "Initials"
+- **E** or **X**: Quick select "Exit"
+- **ESC**: From intro screen exits application; from game returns to intro screen
+
+### Initials Input
+- When "Initials" option is selected, type 2 characters (A-Z, 0-9)
+- Characters are automatically uppercased
+- Input ends automatically after 2 characters are entered
+- Initials are saved to `nsnipes.json` and persist between sessions
+- **Backspace**: Delete last character
+- **ESC**: Cancel input
+
 ## Recent Changes
+
+### Intro Screen and Menu System
+- **Intro Screen**: Added animated NSNIPES banner that scrolls in from the left over 2 seconds
+- **Menu System**: Implemented full menu with navigation, selection, and keyboard shortcuts
+- **Initials System**: Players can set and save their 2-character initials (persisted to nsnipes.json)
+- **Clearing Effects**: Animated clearing effect when starting game or respawning, with messages
+- **Game Over Screen**: Proper game over screen with key press to return to intro
+- **Game Reset**: Full game state reset when starting a new game after game over
+- **Code Refactoring**: Moved all intro screen code to separate `IntroScreen` class for better organization
+
+### Player Movement Improvements
+- **Continuous Movement**: Player movement now supports smooth continuous movement while keys are held
+- **Key State Tracking**: Improved keyboard handling for more natural direction changes
+- **Movement Responsiveness**: Player can change direction immediately when pressing new movement keys
 
 ### Combat and Scoring System
 - **Bullet-Snipe Collision**: Implemented collision detection between bullets and snipes (both directions)
@@ -118,11 +192,12 @@ Use the provided `run.sh` script to build and run the game:
 - **Bullet-Hive Collision**: Implemented hive damage system
   - Bullets stop and are removed when hitting a hive
   - Hives track hit count (3 hits required to destroy)
+  - Hive flash rate decreases by 1/3 each time it's hit (minimum 10ms)
   - When destroyed: hive is removed from screen, all unreleased snipes are killed, player gains 500 points + 25 per unreleased snipe
 - **Scoring System**: Fully functional scoring with points awarded for:
   - Killing snipes: 25 points each
   - Destroying hives: 500 points base + 25 points per unreleased snipe
-- **Status Bar Updates**: Now displays Level and Score in addition to hives, snipes, and lives
+- **Status Bar Updates**: Displays Level and Score in addition to hives, snipes, and lives
 
 ### Visual and Performance Improvements
 - **Refined Snipe Clearing Algorithm**: Implemented sophisticated position tracking system
@@ -137,15 +212,16 @@ Use the provided `run.sh` script to build and run the game:
   - Handles edge cases like snipes colliding and bouncing back
 
 ### Core Game Systems
-- **Added Hive System**: Implemented hives that spawn snipes, with visual representation (glowing cyan/green boxes)
-- **Added Snipe System**: Implemented intelligent snipes with two types ('A' and 'B'), movement AI, and collision detection
-- **Added Bullet System**: Implemented player shooting with 8-directional firing, wall bouncing, and lifetime management
-- **Added Status Bar**: Two-row status display showing game statistics (hives, snipes, lives, level, score)
+- **Hive System**: Implemented hives that spawn snipes, with visual representation (glowing cyan/green boxes)
+- **Snipe System**: Implemented intelligent snipes with two types ('A' and 'B'), movement AI, and collision detection
+- **Bullet System**: Implemented player shooting with 8-directional firing, wall bouncing, and lifetime management
+- **Status Bar**: Two-row status display showing game statistics (hives, snipes, lives, level, score)
 
 ### Player Mechanics
-- **Player Lives**: Changed from 3 to 5 starting lives
+- **Player Lives**: Player starts with 5 lives
 - **Player Respawn**: Player respawns at random valid position when hit by a snipe
 - **Collision Detection**: Improved player-wall collision to properly handle 2x3 player sprite
+- **Player Initials**: Customizable 2-character initials displayed on player sprite
 
 ### Snipe AI and Behavior
 - **Heat Radius System**: Snipes are attracted to player based on distance (closer = more attracted)
@@ -153,56 +229,85 @@ Use the provided `run.sh` script to build and run the game:
 - **Snipe-to-Snipe Collision**: Snipes bounce off each other when they collide
 - **Random Spawning**: Snipes spawn from hives in random directions
 - **Wall Avoidance**: Snipes randomly choose new direction when hitting walls
-- **Snipe Display**: Changed to '@' symbol (Type 'A' = magenta, Type 'B' = green)
+- **Snipe Display**: Uses '@' symbol (Type 'A' = magenta, Type 'B' = green)
 
 ### Visual Improvements
 - **Full-Screen Display**: Removed border, map fills entire console
 - **Snipe Colors**: Type 'A' = magenta, Type 'B' = green
 - **Bullet Appearance**: Flashing red '*' characters
-- **Hive Animation**: Smooth color transitions (cyan/green) every 75ms
+- **Hive Animation**: Smooth color transitions (cyan/green) every 75ms, with individual flash rates
 - **Artifact Fixes**: Fixed '@' and arrow artifacts left behind by snipe movement
+- **Clearing Effects**: Smooth animated transitions when starting game or respawning
 
 ### Performance Optimizations
 - **Separate Timers**: Hives and snipes have their own update timers for better performance
 - **Viewport Culling**: Only visible objects are drawn
 - **Efficient Redrawing**: Sophisticated position tracking ensures only necessary positions are cleared
 - **Smart Clearing**: Uses HashSet-based position tracking to avoid clearing positions still occupied by other snipes
+- **Caching**: Map viewport and status bar values are cached to reduce redundant calculations
 
 ### Technical Improvements
 - **Map Wrapping**: Proper handling of coordinate wrapping for all game entities
 - **Collision Detection**: Comprehensive collision detection for player, bullets, snipes, and hives
 - **Game State Management**: Centralized game state tracking with scoring
+- **Code Organization**: Separated intro screen logic into `IntroScreen` class
+- **Configuration Management**: Game configuration (initials) persisted to JSON file
 
 ## What Works
 
-✅ Player movement (8 directions)  
-✅ Wall collision detection  
-✅ Bullet firing and movement  
-✅ Bullet wall bouncing  
+### Core Gameplay
+✅ Player movement (8 directions with smooth continuous movement)  
+✅ Wall collision detection (prevents player from walking through walls)  
+✅ Bullet firing and movement (8 directions)  
+✅ Bullet wall bouncing (horizontal/vertical wall detection)  
 ✅ Bullet-snipe collision (both directions)  
-✅ Bullet-hive collision and damage  
-✅ Hive spawning and display  
-✅ Hive destruction (3 hits required) - properly cleared from screen  
-✅ Snipe spawning from hives  
-✅ Snipe movement and AI  
-✅ Snipe-to-snipe collision and bouncing  
+✅ Bullet-hive collision and damage (3 hits to destroy)  
 ✅ Player-snipe collision and life loss  
-✅ Player respawn on death  
-✅ Status bar display (hives, snipes, lives, level, score)  
-✅ Map scrolling and wrapping  
-✅ Game state tracking  
-✅ Scoring system (25 points per snipe, 500 + 25 per unreleased snipe for hives)  
+✅ Player respawn on death (random valid position)  
+✅ Game over detection and screen  
+
+### Game Entities
+✅ Hive spawning and display (glowing cyan/green animation)  
+✅ Hive destruction (3 hits required) - properly cleared from screen  
+✅ Hive flash rate decreases when hit  
+✅ Snipe spawning from hives (random directions)  
+✅ Snipe movement and AI (heat radius attraction system)  
+✅ Snipe-to-snipe collision and bouncing  
+✅ Snipe wall collision and direction change  
 ✅ Clean visual rendering - no artifacts from snipe movement  
+
+### UI and Menus
+✅ Intro screen with animated banner  
+✅ Menu system with navigation  
+✅ Initials input and persistence (saved to nsnipes.json)  
+✅ Clearing effect animations (game start, respawn, game over)  
+✅ Status bar display (hives, snipes, lives, level, score)  
+✅ Game over screen with key press to return to menu  
+
+### Game Systems
+✅ Map scrolling and wrapping (horizontal and vertical)  
+✅ Game state tracking (level, score, counts)  
+✅ Scoring system (25 points per snipe, 500 + 25 per unreleased snipe for hives)  
+✅ Game reset functionality (fully resets when starting new game after game over)  
+✅ Player initials customization  
+✅ Configuration persistence (initials saved between sessions)  
+
+### Technical Features
+✅ Performance optimizations (separate timers, viewport culling, caching)  
+✅ Efficient rendering (HashSet-based position tracking for snipes)  
+✅ Smooth animations (player eyes, hive colors, clearing effects)  
+✅ Code organization (IntroScreen class separated from Game class)  
 
 ## Not Yet Implemented
 
 ❌ Multiplayer/networking  
-❌ Level progression (hive count increases but level doesn't advance automatically)  
-❌ Game over screen  
+❌ Level progression (automatic level advancement when all hives destroyed)  
 ❌ High score system  
 ❌ Power-ups or special abilities  
 ❌ Different bullet types  
 ❌ Boss hives or special enemies  
+❌ Sound effects  
+❌ Pause functionality  
 
 ## Project Dependencies
 
