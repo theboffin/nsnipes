@@ -11,7 +11,7 @@ try
     // Set QuitKey to F12 (unused key) instead of Escape
     Application.QuitKey = new Key(KeyCode.F12);
 }
-catch (Exception ex)
+catch (Exception)
 {
     // If setting QuitKey fails, our Application.KeyDown handler in Game class 
     // will catch Escape and handle it before default behavior

@@ -6,6 +6,8 @@ public class IntroScreen
 {
     // Events for communication with Game
     public event Action<int>? OnStartGame; // Level - called when starting a new game from menu
+    public event Action<int>? OnStartMultiplayerGame; // MaxPlayers - called when starting a multiplayer game
+    public event Action<string>? OnJoinGame; // GameId - called when joining an existing game
     public event Action? OnRespawnComplete; // Called when respawn clearing effect completes
     public event Action? OnExit;
     public event Action<string>? OnInitialsChanged; // New initials
@@ -31,6 +33,19 @@ public class IntroScreen
     private readonly string[] _menuItems = { "Start a New Game", "Join an Existing Game", "Initials", "Exit" };
     private bool _enteringInitials = false;
     private string _initialsInput = "";
+    
+    // Multiplayer state
+    private bool _enteringPlayerCount = false;
+    private string _playerCountInput = "1";
+    private bool _enteringGameId = false;
+    private string _gameIdInput = "";
+    private bool _waitingForPlayers = false;
+    private string _currentGameId = "";
+    private int _currentPlayerCount = 0;
+    private int _maxPlayers = 1;
+    private int _timeRemaining = 60;
+    private List<string> _joinedPlayers = new List<string>(); // List of player initials who joined
+    private DateTime _joinWaitStartTime = DateTime.Now;
     
     // Dependencies
     private GameConfig _config;
@@ -180,6 +195,24 @@ public class IntroScreen
             return;
         }
         
+        if (_waitingForPlayers)
+        {
+            DrawWaitingForPlayers(width, height);
+            return;
+        }
+        
+        if (_enteringPlayerCount)
+        {
+            DrawPlayerCountInput(width, height);
+            return;
+        }
+        
+        if (_enteringGameId)
+        {
+            DrawGameIdInput(width, height);
+            return;
+        }
+        
         // Fill screen with blue background
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
@@ -265,6 +298,31 @@ public class IntroScreen
             return;
         }
         
+        if (_enteringPlayerCount)
+        {
+            HandlePlayerCountInput(e);
+            return;
+        }
+        
+        if (_enteringGameId)
+        {
+            HandleGameIdInput(e);
+            return;
+        }
+        
+        if (_waitingForPlayers)
+        {
+            // During wait, allow Escape to cancel
+            if (e.KeyCode == KeyCode.Esc)
+            {
+                _waitingForPlayers = false;
+                _enteringPlayerCount = false;
+                _enteringGameId = false;
+                _showMenu = true;
+            }
+            return;
+        }
+        
         if (!_showMenu || _clearingScreen)
             return;
         
@@ -313,11 +371,15 @@ public class IntroScreen
         switch (_selectedMenuIndex)
         {
             case 0: // Start a New Game
-                StartClearingEffect($"Level {_gameState.Level}", isStartingNewGame: true);
+                // Prompt for number of players (1-5)
+                _enteringPlayerCount = true;
+                _playerCountInput = "1";
                 break;
                 
             case 1: // Join an Existing Game
-                // Do nothing for now
+                // Prompt for game ID
+                _enteringGameId = true;
+                _gameIdInput = "";
                 break;
                 
             case 2: // Initials
@@ -376,6 +438,155 @@ public class IntroScreen
                 }
             }
         }
+    }
+    
+    private void HandlePlayerCountInput(dynamic e)
+    {
+        // Handle backspace
+        if (e.KeyCode == KeyCode.Backspace)
+        {
+            if (_playerCountInput.Length > 0)
+            {
+                _playerCountInput = _playerCountInput.Substring(0, _playerCountInput.Length - 1);
+            }
+            return;
+        }
+        
+        // Handle Escape to cancel
+        if (e.KeyCode == KeyCode.Esc)
+        {
+            _enteringPlayerCount = false;
+            _playerCountInput = "1";
+            return;
+        }
+        
+        // Handle Enter to confirm
+        if (e.KeyCode == KeyCode.Enter)
+        {
+            if (int.TryParse(_playerCountInput, out int count) && count >= 1 && count <= 5)
+            {
+                _maxPlayers = count;
+                _enteringPlayerCount = false;
+                OnStartMultiplayerGame?.Invoke(count);
+            }
+            return;
+        }
+        
+        // Get character from key
+        char? ch = GetCharFromKey(e);
+        if (ch == null)
+            return;
+        
+        // Validate character (0-9)
+        if (ch >= '0' && ch <= '9')
+        {
+            if (_playerCountInput.Length < 1)
+            {
+                _playerCountInput = ch.Value.ToString();
+            }
+            else if (_playerCountInput.Length == 1)
+            {
+                string newInput = _playerCountInput + ch.Value;
+                if (int.TryParse(newInput, out int count) && count >= 1 && count <= 5)
+                {
+                    _playerCountInput = newInput;
+                }
+            }
+        }
+    }
+    
+    private void HandleGameIdInput(dynamic e)
+    {
+        // Handle backspace
+        if (e.KeyCode == KeyCode.Backspace)
+        {
+            if (_gameIdInput.Length > 0)
+            {
+                _gameIdInput = _gameIdInput.Substring(0, _gameIdInput.Length - 1);
+            }
+            return;
+        }
+        
+        // Handle Escape to cancel
+        if (e.KeyCode == KeyCode.Esc)
+        {
+            _enteringGameId = false;
+            _gameIdInput = "";
+            return;
+        }
+        
+        // Handle Enter to confirm
+        if (e.KeyCode == KeyCode.Enter)
+        {
+            if (_gameIdInput.Length == 6)
+            {
+                _enteringGameId = false;
+                OnJoinGame?.Invoke(_gameIdInput.ToUpper());
+            }
+            return;
+        }
+        
+        // Get character from key
+        char? ch = GetCharFromKey(e);
+        if (ch == null)
+            return;
+        
+        // Validate character (A-Z, 0-9)
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+        {
+            // Convert to uppercase
+            char upperChar = char.ToUpper(ch.Value);
+            
+            if (_gameIdInput.Length < 6)
+            {
+                _gameIdInput += upperChar;
+                
+                // If we have 6 characters, automatically submit
+                if (_gameIdInput.Length == 6)
+                {
+                    _enteringGameId = false;
+                    OnJoinGame?.Invoke(_gameIdInput);
+                }
+            }
+        }
+    }
+    
+    public void ShowWaitingForPlayers(string gameId, int maxPlayers, bool isHost)
+    {
+        _waitingForPlayers = true;
+        _showMenu = false;
+        _currentGameId = gameId;
+        _maxPlayers = maxPlayers;
+        _currentPlayerCount = isHost ? 1 : 0; // Host counts as 1
+        _timeRemaining = 60;
+        _joinWaitStartTime = DateTime.Now;
+        _joinedPlayers.Clear();
+        if (isHost)
+        {
+            _joinedPlayers.Add(_config.Initials); // Host is first player
+        }
+    }
+    
+    public void UpdatePlayerJoin(string playerInitials)
+    {
+        if (!_joinedPlayers.Contains(playerInitials))
+        {
+            _joinedPlayers.Add(playerInitials);
+        }
+        _currentPlayerCount = _joinedPlayers.Count;
+    }
+    
+    public void UpdatePlayerCount(int currentPlayers, int maxPlayers, int timeRemaining)
+    {
+        _currentPlayerCount = currentPlayers;
+        _maxPlayers = maxPlayers;
+        _timeRemaining = timeRemaining;
+    }
+    
+    public void StartGame()
+    {
+        _waitingForPlayers = false;
+        StartClearingEffect($"Level {_gameState.Level}", isStartingNewGame: true);
     }
     
     private char? GetCharFromKey(dynamic e)
@@ -652,6 +863,7 @@ public class IntroScreen
     private void DrawGameOverScreen(int width, int height)
     {
         // Draw game over screen
+        if (Application.Driver == null) return;
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
@@ -844,6 +1056,183 @@ public class IntroScreen
                 _isStartingNewGame = false; // Reset flag
             }
         }
+    }
+    
+    private void DrawPlayerCountInput(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Fill screen with blue background
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        for (int y = 0; y < height; y++)
+        {
+            Application.Driver.Move(0, y);
+            Application.Driver.AddStr(new string(' ', width));
+        }
+        
+        // Draw prompt
+        string prompt = "Enter number of players (1-5):";
+        int promptX = (width - prompt.Length) / 2;
+        int promptY = height / 2 - 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(promptX, promptY);
+        Application.Driver.AddStr(prompt);
+        
+        // Draw input with caret
+        string inputDisplay = _playerCountInput + "▊";
+        int inputX = (width - inputDisplay.Length) / 2;
+        int inputY = promptY + 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
+        Application.Driver.Move(inputX, inputY);
+        Application.Driver.AddStr(inputDisplay);
+        
+        // Draw instructions
+        string instructions = "Press ENTER to confirm, ESC to cancel";
+        int instX = (width - instructions.Length) / 2;
+        int instY = inputY + 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(instX, instY);
+        Application.Driver.AddStr(instructions);
+    }
+    
+    private void DrawGameIdInput(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Fill screen with blue background
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        for (int y = 0; y < height; y++)
+        {
+            Application.Driver.Move(0, y);
+            Application.Driver.AddStr(new string(' ', width));
+        }
+        
+        // Draw prompt
+        string prompt = "Enter Game ID (6 characters):";
+        int promptX = (width - prompt.Length) / 2;
+        int promptY = height / 2 - 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(promptX, promptY);
+        Application.Driver.AddStr(prompt);
+        
+        // Draw input with caret
+        string inputDisplay = _gameIdInput.PadRight(6, '_');
+        if (_gameIdInput.Length < 6)
+        {
+            inputDisplay = _gameIdInput + "▊" + new string('_', 5 - _gameIdInput.Length);
+        }
+        int inputX = (width - inputDisplay.Length) / 2;
+        int inputY = promptY + 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
+        Application.Driver.Move(inputX, inputY);
+        foreach (char c in inputDisplay)
+        {
+            if (c == '▊')
+            {
+                Application.Driver.AddRune(c);
+            }
+            else if (c == '_')
+            {
+                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
+                Application.Driver.AddRune(c);
+                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
+            }
+            else
+            {
+                Application.Driver.AddRune(c);
+            }
+        }
+        
+        // Draw instructions
+        string instructions = "Press ESC to cancel";
+        int instX = (width - instructions.Length) / 2;
+        int instY = inputY + 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(instX, instY);
+        Application.Driver.AddStr(instructions);
+    }
+    
+    private void DrawWaitingForPlayers(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Fill screen with blue background
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        for (int y = 0; y < height; y++)
+        {
+            Application.Driver.Move(0, y);
+            Application.Driver.AddStr(new string(' ', width));
+        }
+        
+        // Update time remaining
+        int elapsed = (int)(DateTime.Now - _joinWaitStartTime).TotalSeconds;
+        _timeRemaining = Math.Max(0, 60 - elapsed);
+        
+        // Draw game ID
+        string gameIdText = $"Game ID: {_currentGameId}";
+        int gameIdX = (width - gameIdText.Length) / 2;
+        int gameIdY = height / 4;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Blue));
+        Application.Driver.Move(gameIdX, gameIdY);
+        Application.Driver.AddStr(gameIdText);
+        
+        // Draw waiting message
+        string waitingText = "Waiting for players...";
+        int waitingX = (width - waitingText.Length) / 2;
+        int waitingY = gameIdY + 3;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(waitingX, waitingY);
+        Application.Driver.AddStr(waitingText);
+        
+        // Draw player count
+        string countText = $"{_currentPlayerCount} of {_maxPlayers} players joined";
+        int countX = (width - countText.Length) / 2;
+        int countY = waitingY + 2;
+        Application.Driver.Move(countX, countY);
+        Application.Driver.AddStr(countText);
+        
+        // Draw time remaining
+        string timeText = $"Time remaining: {_timeRemaining} seconds";
+        int timeX = (width - timeText.Length) / 2;
+        int timeY = countY + 2;
+        Application.Driver.Move(timeX, timeY);
+        Application.Driver.AddStr(timeText);
+        
+        // Draw joined players list
+        if (_joinedPlayers.Count > 0)
+        {
+            int listY = timeY + 3;
+            string listHeader = "Players joined:";
+            int listHeaderX = (width - listHeader.Length) / 2;
+            Application.Driver.Move(listHeaderX, listY);
+            Application.Driver.AddStr(listHeader);
+            
+            int playerY = listY + 2;
+            foreach (var initials in _joinedPlayers)
+            {
+                string playerText = $"  • {initials}";
+                int playerX = (width - playerText.Length) / 2;
+                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
+                Application.Driver.Move(playerX, playerY);
+                Application.Driver.AddStr(playerText);
+                playerY++;
+            }
+        }
+        
+        // Draw instructions
+        string instructions = "Press ESC to cancel";
+        int instX = (width - instructions.Length) / 2;
+        int instY = height - 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
+        Application.Driver.Move(instX, instY);
+        Application.Driver.AddStr(instructions);
     }
 }
 

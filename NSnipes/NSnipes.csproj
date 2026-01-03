@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="Terminal.Gui" Version="2.0.0-prealpha.1895" />
+    <PackageReference Include="MQTTnet" Version="4.3.3.952" />
   </ItemGroup>
 
 </Project>

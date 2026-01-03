@@ -42,22 +42,13 @@ So what's left to do:
   - Currently the game doesn't know when a level is complete (i.e. all Hives and Snipes are destroyed)
   - Incremental difficulty as Level's increase, i.e. more Snipes per hive,  more Hives
   - Ability to start the game at a given level (and for it to know based on level number how many hives/snipes to use)
-- Start New Game
-  - Should prompt how many players (default at 1)
-  - Should advertise the game id - i.e. a 6 digit alpha numeric game id.
-  - Should wait 30 secs for players to join (upto the number specified)
-  - Game to start after players have joined or 30secs is up
-- Join a game
-  - Should prompt for game id (a 6 digit alpha numeric code)
-  - if the game exists and is waiting, then this player should wait for the game to start
-  - if the game doesn't exist or is no longer waiting, give player a message
-- Network game play
-  - by either 'starting' or 'joining' a game played across the internet keyed on game id.  
-    - The game 'server' i.e. the program which 'Started' a game will send updates to all player for snipe movements, hive details, and player locations.
-    - other players who 'joined' the game will listen to snipe movements, player movements, etc to update their screens
-    - game coordination across the network
-  - After all players have lost their last life, produce a final results screen to all player showing the ranking of each player and scores etc.
-  - option to restart another game with all the same players
+- Multiplayer Enhancements
+  - ✅ Start Multiplayer Game (implemented - prompts for player count, generates 6-character game ID, 60-second join window)
+  - ✅ Join Multiplayer Game (implemented - prompts for game ID, waits for game to start)
+  - ✅ Network game play (implemented - real-time synchronization of player positions, bullets, hives, snipes)
+  - ⚠️ Full game state synchronization (scores, lives) - partially implemented, needs refinement
+  - ❌ Multiplayer game end/results screen (after all players lose lives, show rankings and scores)
+  - ❌ Option to restart another game with all the same players
 
 
 
@@ -68,8 +59,9 @@ So what's left to do:
 **Intro Screen**
 - Animated NSNIPES banner that scrolls in from the left over 2 seconds
 - Menu system with the following options:
-  - **Start a New Game**: Begins a new game with a clearing effect animation
-  - **Join an Existing Game**: Placeholder for future multiplayer functionality
+  - **Start a New Game**: Begins a new single-player game with a clearing effect animation
+  - **Start Multiplayer**: Host a new multiplayer game (1-5 players, 60-second join window)
+  - **Join Multiplayer**: Join an existing multiplayer game by entering a 6-character game ID
   - **Initials**: Allows setting 2-character player initials (A-Z, 0-9)
   - **Exit**: Exits the application
 - Menu navigation:
@@ -202,7 +194,8 @@ So what's left to do:
 - **Arrow Keys** or **Numeric Keypad (2, 8)**: Navigate menu up/down
 - **ENTER**: Select current menu option
 - **S**: Quick select "Start a New Game"
-- **J**: Quick select "Join an Existing Game"
+- **M**: Quick select "Start Multiplayer"
+- **J**: Quick select "Join Multiplayer"
 - **I**: Quick select "Initials"
 - **E** or **X**: Quick select "Exit"
 - **ESC**: From intro screen exits application; from game returns to intro screen
@@ -217,9 +210,22 @@ So what's left to do:
 
 ## Recent Changes
 
+### Multiplayer Implementation (Latest)
+- **MQTT Networking**: Implemented full multiplayer support using MQTT protocol
+- **Game Discovery**: Host can create games with 6-character game IDs, clients can join by ID
+- **Real-time Synchronization**: Player positions, bullets, hives, and snipes synchronized across all clients
+- **Host-Client Architecture**: Host is authoritative for game state (hives, snipes), all players can move and shoot
+- **Player Rendering**: Remote players displayed in yellow, local player in white/blue
+- **Position Synchronization**: Fixed initial position sync issues, proper world coordinate system
+- **Respawn Synchronization**: Player respawn positions properly synchronized across network
+- **Initials Synchronization**: Player initials correctly displayed for all players
+- **Network Message System**: Comprehensive DTO system for all game events (positions, bullets, game state)
+
 ### Intro Screen and Menu System
 - **Intro Screen**: Added animated NSNIPES banner that scrolls in from the left over 2 seconds
 - **Menu System**: Implemented full menu with navigation, selection, and keyboard shortcuts
+- **Multiplayer Menu Options**: Added "Start Multiplayer" and "Join Multiplayer" options
+- **Waiting Screen**: Multiplayer waiting screen showing player count, game ID, and join notifications
 - **Initials System**: Players can set and save their 2-character initials (persisted to nsnipes.json)
 - **Clearing Effects**: Animated clearing effect when starting game or respawning, with messages
 - **Game Over Screen**: Proper game over screen with key press to return to intro
@@ -331,6 +337,7 @@ So what's left to do:
 ✅ Clearing effect animations (game start, respawn, game over)  
 ✅ Status bar display (hives, snipes, lives, level, score)  
 ✅ Game over screen with key press to return to menu  
+✅ Multiplayer waiting screen with player count and join notifications  
 
 ### Game Systems
 ✅ Map scrolling and wrapping (horizontal and vertical)  
@@ -345,12 +352,61 @@ So what's left to do:
 ✅ Efficient rendering (HashSet-based position tracking for snipes)  
 ✅ Smooth animations (player eyes, hive colors, clearing effects)  
 ✅ Code organization (IntroScreen class separated from Game class)  
+✅ MQTT networking infrastructure (MqttGameClient, GameSession classes)  
+✅ Network message serialization (JSON-based DTOs for all game events)  
+✅ World coordinate system (all positions in map space, viewport conversion local)  
+
+## Multiplayer Features
+
+### ✅ Implemented
+
+**Game Discovery and Joining**
+- Host can start a multiplayer game (1-5 players)
+- 6-character alphanumeric game ID for easy sharing
+- 60-second join window for players to join
+- Real-time player count updates ("X of Y players joined")
+- Player join notifications ("[Initials] joined!")
+- Game automatically starts after join window expires or max players reached
+
+**Network Architecture**
+- MQTT-based networking using HiveMQ public broker
+- Host-client architecture (host is authoritative for game state)
+- Real-time position synchronization (20ms update rate)
+- Bullet synchronization across all players
+- Game state synchronization (hives, snipes, player positions)
+
+**Player Synchronization**
+- All players see each other's movement in real-time
+- Remote players displayed in yellow (local player in white/blue)
+- Player initials synchronized across all clients
+- Player respawn positions synchronized
+- Player-to-player collision detection (players can't overlap)
+
+**Game State Synchronization**
+- Hive positions synchronized (all players see same hives)
+- Snipe positions synchronized (host controls snipe movement, clients receive updates)
+- Bullet positions synchronized (all players can shoot, host validates collisions)
+- Game state snapshots on game start (ensures all players start with same state)
+
+**Technical Implementation**
+- World coordinate system (all positions in map space, converted to viewport locally)
+- Proper viewport position tracking for artifact-free rendering
+- Network latency handling (latest position updates, not every intermediate step)
+- Sequence numbers for ordered position updates
+- Fire-and-forget messaging for low-latency position updates
+
+### ⚠️ Known Issues / Limitations
+
+- Initial position synchronization may have minor timing issues
+- Full game state synchronization (scores, lives) still being refined
+- No level progression in multiplayer yet
+- No game end/results screen for multiplayer yet
 
 ## Not Yet Implemented
 
-❌ Multiplayer/networking  
 ❌ Level progression (automatic level advancement when all hives destroyed)  
 ❌ High score system  
+❌ Multiplayer game end/results screen  
 ❌ Power-ups or special abilities  
 ❌ Different bullet types  
 ❌ Boss hives or special enemies  
@@ -360,7 +416,8 @@ So what's left to do:
 ## Project Dependencies
 
 This project is built with the following dependencies:
-- https://github.com/gui-cs/Terminal.Gui
+- https://github.com/gui-cs/Terminal.Gui (v2.0.0-prealpha.1895)
+- MQTTnet (for multiplayer networking via MQTT)
 
 ## Map Generation
 
