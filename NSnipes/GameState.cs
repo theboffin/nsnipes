@@ -11,12 +11,28 @@ public class GameState
     
     public int GetHiveCountForLevel(int level)
     {
-        // Level 1 = 5 hives, then +1 hive every 5 levels
-        // Level 1-5: 5 hives
-        // Level 6-10: 6 hives
-        // Level 11-15: 7 hives
+        // Level 1 = 4 hives, then +1 hive every 4 levels
+        // Level 1-4: 4 hives
+        // Level 5-8: 5 hives
+        // Level 9-12: 6 hives
         // etc.
-        return 5 + ((level - 1) / 5);
+        return 4 + ((level - 1) / 4);
+    }
+    
+    public int GetSnipesPerHiveForLevel(int level)
+    {
+        // Level 1 = 10 snipes per hive, then +1 snipe per level
+        // Level 1: 10 snipes per hive
+        // Level 2: 11 snipes per hive
+        // Level 3: 12 snipes per hive
+        // etc.
+        return 10 + (level - 1);
+    }
+    
+    public bool IsLevelComplete()
+    {
+        // Level is complete when all hives and all snipes are destroyed
+        return HivesUndestroyed == 0 && SnipesUndestroyed == 0;
     }
 }
 

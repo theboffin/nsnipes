@@ -1,4 +1,5 @@
 using Terminal.Gui;
+using System.Linq;
 
 namespace NSnipes;
 
@@ -18,8 +19,6 @@ public class IntroScreen
     private bool _bannerScrolling = true;
     private bool _showMenu = false;
     private bool _clearingScreen = false;
-    private bool _gameOver = false;
-    private bool _waitingForGameOverKey = false;
     private bool _isStartingNewGame = false; // Track if clearing effect is for starting a new game vs respawn
     
     private DateTime _bannerStartTime;
@@ -28,11 +27,19 @@ public class IntroScreen
     private DateTime _clearingStartTime;
     private string _clearingMessage = "";
     
+    // Game over screen
+    private GameOverScreen _gameOverScreen;
+    
     // Menu state
     private int _selectedMenuIndex = 0;
     private readonly string[] _menuItems = { "Start a New Game", "Join an Existing Game", "Initials", "Exit" };
     private bool _enteringInitials = false;
     private string _initialsInput = "";
+    
+    // Level selection state
+    private bool _enteringStartingLevel = false;
+    private string _startingLevelInput = "1";
+    private int _selectedStartingLevel = 1;
     
     // Multiplayer state
     private bool _enteringPlayerCount = false;
@@ -113,12 +120,18 @@ public class IntroScreen
         _config = config;
         _gameState = gameState;
         _bannerStartTime = DateTime.Now;
+        _gameOverScreen = new GameOverScreen();
+        _gameOverScreen.OnReturnToIntro += () =>
+        {
+            Show();
+            OnReturnToIntro?.Invoke();
+        };
     }
     
     public bool IsActive => _isActive;
     public bool IsClearingScreen => _clearingScreen;
-    public bool IsGameOver => _gameOver;
-    public bool IsWaitingForGameOverKey => _waitingForGameOverKey;
+    public bool IsGameOver => _gameOverScreen.IsActive;
+    public bool IsWaitingForGameOverKey => _gameOverScreen.IsWaitingForEnter;
     
     public void SetMapCharCallback(Func<int, int, char> callback)
     {
@@ -131,10 +144,13 @@ public class IntroScreen
         _bannerScrolling = true;
         _showMenu = false;
         _clearingScreen = false;
-        _gameOver = false;
-        _waitingForGameOverKey = false;
+        _gameOverScreen.Hide();
         _selectedMenuIndex = 0;
         _enteringInitials = false;
+        _enteringStartingLevel = false;
+        _enteringPlayerCount = false;
+        _startingLevelInput = "1";
+        _selectedStartingLevel = 1;
         _bannerStartTime = DateTime.Now;
         
         // Clear the screen before showing intro
@@ -161,18 +177,13 @@ public class IntroScreen
         _clearingStartTime = DateTime.Now;
         _clearingRectSize = 0;
         _clearingMessage = message;
-        _gameOver = false;
-        _waitingForGameOverKey = false;
+        _gameOverScreen.Hide();
         _isStartingNewGame = isStartingNewGame; // Track if this is for starting a new game
     }
     
-    public void ShowGameOver(string message)
+    public void ShowGameOver(List<PlayerScoreInfo> playerScores)
     {
-        _gameOver = true;
-        _clearingScreen = true;
-        _clearingStartTime = DateTime.Now;
-        _clearingRectSize = 0;
-        _clearingMessage = message;
+        _gameOverScreen.Show(playerScores);
     }
     
     public void Draw()
@@ -183,9 +194,10 @@ public class IntroScreen
         int width = Application.Driver.Cols;
         int height = Application.Driver.Rows;
         
-        if (_waitingForGameOverKey)
+        // Draw game over screen if active
+        if (_gameOverScreen.IsActive)
         {
-            DrawGameOverScreen(width, height);
+            _gameOverScreen.Draw();
             return;
         }
         
@@ -198,6 +210,12 @@ public class IntroScreen
         if (_waitingForPlayers)
         {
             DrawWaitingForPlayers(width, height);
+            return;
+        }
+        
+        if (_enteringStartingLevel)
+        {
+            DrawStartingLevelInput(width, height);
             return;
         }
         
@@ -265,12 +283,9 @@ public class IntroScreen
     public bool HandleKey(dynamic e)
     {
         // Handle game over key press - this must be checked first
-        if (_waitingForGameOverKey)
+        if (_gameOverScreen.IsActive)
         {
-            // Any key press returns to intro screen
-            Show();
-            OnReturnToIntro?.Invoke(); // Notify Game to reset state
-            return true;
+            return _gameOverScreen.HandleKey(e);
         }
         
         // Handle intro screen key press
@@ -280,8 +295,7 @@ public class IntroScreen
             return true;
         }
         
-        // If we're in clearing screen but not waiting for game over key, don't handle keys
-        // (clearing effect is in progress)
+        // If we're in clearing screen, don't handle keys (clearing effect is in progress)
         if (_clearingScreen)
         {
             return false;
@@ -295,6 +309,12 @@ public class IntroScreen
         if (_enteringInitials)
         {
             HandleInitialsInput(e);
+            return;
+        }
+        
+        if (_enteringStartingLevel)
+        {
+            HandleStartingLevelInput(e);
             return;
         }
         
@@ -371,9 +391,10 @@ public class IntroScreen
         switch (_selectedMenuIndex)
         {
             case 0: // Start a New Game
-                // Prompt for number of players (1-5)
-                _enteringPlayerCount = true;
-                _playerCountInput = "1";
+                // First prompt for starting level
+                _enteringStartingLevel = true;
+                _startingLevelInput = "1";
+                _selectedStartingLevel = 1;
                 break;
                 
             case 1: // Join an Existing Game
@@ -440,6 +461,57 @@ public class IntroScreen
         }
     }
     
+    private void HandleStartingLevelInput(dynamic e)
+    {
+        // Handle backspace
+        if (e.KeyCode == KeyCode.Backspace)
+        {
+            if (_startingLevelInput.Length > 0)
+            {
+                _startingLevelInput = _startingLevelInput.Substring(0, _startingLevelInput.Length - 1);
+            }
+            return;
+        }
+        
+        // Handle Escape to cancel
+        if (e.KeyCode == KeyCode.Esc)
+        {
+            _enteringStartingLevel = false;
+            _startingLevelInput = "1";
+            _selectedStartingLevel = 1;
+            return;
+        }
+        
+        // Handle Enter to confirm
+        if (e.KeyCode == KeyCode.Enter)
+        {
+            if (int.TryParse(_startingLevelInput, out int level) && level >= 1 && level <= 50)
+            {
+                _selectedStartingLevel = level;
+                _enteringStartingLevel = false;
+                // Now prompt for player count
+                _enteringPlayerCount = true;
+                _playerCountInput = "1";
+            }
+            return;
+        }
+        
+        // Get character from key
+        char? ch = GetCharFromKey(e);
+        if (ch.HasValue)
+        {
+            // Only allow digits
+            if (ch.Value >= '0' && ch.Value <= '9')
+            {
+                // Limit to 2 digits (max level 50)
+                if (_startingLevelInput.Length < 2)
+                {
+                    _startingLevelInput += ch.Value;
+                }
+            }
+        }
+    }
+    
     private void HandlePlayerCountInput(dynamic e)
     {
         // Handle backspace
@@ -457,6 +529,9 @@ public class IntroScreen
         {
             _enteringPlayerCount = false;
             _playerCountInput = "1";
+            // Go back to level selection
+            _enteringStartingLevel = true;
+            _startingLevelInput = _selectedStartingLevel.ToString();
             return;
         }
         
@@ -467,6 +542,8 @@ public class IntroScreen
             {
                 _maxPlayers = count;
                 _enteringPlayerCount = false;
+                // Set the starting level in game state before starting
+                _gameState.Level = _selectedStartingLevel;
                 OnStartMultiplayerGame?.Invoke(count);
             }
             return;
@@ -586,7 +663,12 @@ public class IntroScreen
     public void StartGame()
     {
         _waitingForPlayers = false;
-        StartClearingEffect($"Level {_gameState.Level}", isStartingNewGame: true);
+        // Calculate level info for display (same format as level progression)
+        int hiveCount = _gameState.GetHiveCountForLevel(_gameState.Level);
+        int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(_gameState.Level);
+        int totalSnipes = hiveCount * snipesPerHive;
+        string levelMessage = $"LEVEL {_gameState.Level} - {hiveCount} HIVES with {totalSnipes} SNIPES";
+        StartClearingEffect(levelMessage, isStartingNewGame: true);
     }
     
     private char? GetCharFromKey(dynamic e)
@@ -860,48 +942,6 @@ public class IntroScreen
         }
     }
     
-    private void DrawGameOverScreen(int width, int height)
-    {
-        // Draw game over screen
-        if (Application.Driver == null) return;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                Application.Driver.Move(x, y);
-                Application.Driver.AddRune('*');
-            }
-        }
-        // Draw GAME OVER message with spacing
-        if (!string.IsNullOrEmpty(_clearingMessage))
-        {
-            string gameOverMessageWithSpacing = "  " + _clearingMessage + "  ";
-            int gameOverMessageX = (width - gameOverMessageWithSpacing.Length) / 2;
-            int gameOverMessageY = height / 2;
-            
-            // Clear area around message
-            for (int rowOffset = -1; rowOffset <= 1; rowOffset++)
-            {
-                int y = gameOverMessageY + rowOffset;
-                if (y >= 0 && y < height)
-                {
-                    int clearWidth = gameOverMessageWithSpacing.Length + 4;
-                    int clearX = (width - clearWidth) / 2;
-                    for (int x = clearX; x < clearX + clearWidth && x < width; x++)
-                    {
-                        Application.Driver.Move(x, y);
-                        Application.Driver.AddRune(' ');
-                    }
-                }
-            }
-            
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-            Application.Driver.Move(gameOverMessageX, gameOverMessageY);
-            Application.Driver.AddStr(gameOverMessageWithSpacing);
-        }
-    }
-    
     private void DrawClearingEffect(int width, int height)
     {
         if (Application.Driver == null)
@@ -1024,38 +1064,67 @@ public class IntroScreen
             Application.Driver.AddStr(messageWithSpacing);
         }
         
-        // When rectangle covers entire screen, transition to game or wait for key (game over)
+        // When rectangle covers entire screen, transition to game
         if (newRectSize >= maxSize)
         {
-            if (_gameOver)
+            // Normal game start or respawn
+            _isActive = false;
+            _clearingScreen = false;
+            
+            // Only call OnStartGame if we're actually starting a new game (from menu)
+            // If this is a respawn, just end the clearing effect without resetting game state
+            if (_isStartingNewGame)
             {
-                // Game over - wait for key press
-                _waitingForGameOverKey = true;
-                _clearingScreen = false; // Stop the animation, but keep showing the screen
-                // Draw final screen with GAME OVER message
-                DrawGameOverScreen(width, height);
+                OnStartGame?.Invoke(_gameState.Level);
             }
             else
             {
-                // Normal game start or respawn
-                _isActive = false;
-                _clearingScreen = false;
-                
-                // Only call OnStartGame if we're actually starting a new game (from menu)
-                // If this is a respawn, just end the clearing effect without resetting game state
-                if (_isStartingNewGame)
-                {
-                    OnStartGame?.Invoke(_gameState.Level);
-                }
-                else
-                {
-                    // This is a respawn - notify that clearing effect completed
-                    OnRespawnComplete?.Invoke();
-                }
-                
-                _isStartingNewGame = false; // Reset flag
+                // This is a respawn - notify that clearing effect completed
+                OnRespawnComplete?.Invoke();
             }
+            
+            _isStartingNewGame = false; // Reset flag
         }
+    }
+    
+    private void DrawStartingLevelInput(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Fill screen with blue background
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        for (int y = 0; y < height; y++)
+        {
+            Application.Driver.Move(0, y);
+            Application.Driver.AddStr(new string(' ', width));
+        }
+        
+        // Draw prompt
+        string prompt = "Select Starting Level (1-50):";
+        int promptX = (width - prompt.Length) / 2;
+        int promptY = height / 2 - 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(promptX, promptY);
+        Application.Driver.AddStr(prompt);
+        
+        // Draw input with caret
+        string inputDisplay = _startingLevelInput + "▊";
+        int inputX = (width - inputDisplay.Length) / 2;
+        int inputY = promptY + 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
+        Application.Driver.Move(inputX, inputY);
+        Application.Driver.AddStr(inputDisplay);
+        
+        // Draw instructions
+        string instructions = "Press ENTER to confirm, ESC to cancel";
+        int instX = (width - instructions.Length) / 2;
+        int instY = inputY + 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(instX, instY);
+        Application.Driver.AddStr(instructions);
     }
     
     private void DrawPlayerCountInput(int width, int height)

@@ -13,19 +13,22 @@ public class Hive
     public int SnipesType3 { get; set; } // chr(3) snipes
     public DateTime LastSpawnTime { get; set; }
     public const int SpawnIntervalMs = 3000; // Spawn a snipe every 3 seconds (randomized)
-    public const int SnipesPerHive = 20; // 10 of each type
     
     // Hive is a small rectangular box (2x2 characters)
     public const int Width = 2;
     public const int Height = 2;
     
-    public Hive(int x, int y)
+    public Hive(int x, int y, int snipesPerHive)
     {
         X = x;
         Y = y;
-        SnipesRemaining = SnipesPerHive;
-        SnipesType2 = 10;
-        SnipesType3 = 10;
+        SnipesRemaining = snipesPerHive;
+        // Split snipes evenly between type A and B
+        SnipesType2 = snipesPerHive / 2;
+        SnipesType3 = snipesPerHive / 2;
+        // If odd number, give the extra to type A
+        if (snipesPerHive % 2 == 1)
+            SnipesType2++;
         LastSpawnTime = DateTime.Now;
     }
     

@@ -56,7 +56,7 @@ public class Game : Window
 
     // Key state tracking for smooth movement
     private Dictionary<KeyCode, DateTime> _pressedKeys = new Dictionary<KeyCode, DateTime>();
-    private const int KeyRepeatThresholdMs = 150; // Consider key released if not seen in 150ms
+    private const int KeyRepeatThresholdMs = 60; // Consider key released if not seen in 60ms (reduced for faster response)
 
     public Game()
     {
@@ -75,7 +75,8 @@ public class Game : Window
         _introScreen = new IntroScreen(_config, _gameState);
         _introScreen.OnStartGame += (level) =>
         {
-            ResetGame(); // Reset all game state for a new game
+            // Level is already set in game state by IntroScreen
+            ResetGame(); // Reset all game state for a new game (preserves level)
         };
         _introScreen.OnRespawnComplete += () =>
         {
@@ -186,7 +187,7 @@ public class Game : Window
         {
             if (Application.Driver != null)
             {
-                if (_introScreen.IsActive || _introScreen.IsClearingScreen || _introScreen.IsWaitingForGameOverKey)
+                if (_introScreen.IsActive || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
                 {
                     _introScreen.Draw();
                 }
@@ -307,6 +308,8 @@ public class Game : Window
 
         // Track movement keys for continuous movement
         // Update key state when movement keys are pressed
+        // When a new movement key is pressed, immediately trigger movement processing
+        bool movementKeyPressed = false;
         switch (e.KeyCode)
         {
             case KeyCode.D8: // Numeric keypad 8 (Up)
@@ -321,13 +324,28 @@ public class Game : Window
             case KeyCode.D9: // Numeric keypad 9 (Up-Right diagonal)
             case KeyCode.D1: // Numeric keypad 1 (Down-Left diagonal)
             case KeyCode.D3: // Numeric keypad 3 (Down-Right diagonal)
-                // Update key state - mark this key as currently pressed
+                // Update key state - mark this key as currently pressed with current time
+                // This ensures new key presses are immediately recognized
                 _pressedKeys[e.KeyCode] = DateTime.Now;
+                movementKeyPressed = true;
                 break;
         }
-
-        // Movement will be handled by ProcessPlayerMovement() in the timer
-        bool moved = false;
+        
+        // If a movement key was just pressed, immediately process movement
+        // This provides instant response when changing directions
+        if (movementKeyPressed && !_introScreen.IsActive && !_introScreen.IsClearingScreen && 
+            !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
+        {
+            // Process movement immediately for instant response
+            if (ProcessPlayerMovement())
+            {
+                // Player moved - redraw to show the movement immediately
+                if (Application.Driver != null)
+                {
+                    DrawMapAndPlayer();
+                }
+            }
+        }
 
         // Handle bullet firing (q, w, e, a, d, z, x, c)
         // Player is 2 columns wide [X, X+1] and 3 rows tall [Y, Y+1, Y+2]
@@ -405,29 +423,6 @@ public class Game : Window
                 }
             }
         }
-
-        // Only redraw if movement occurred
-        if (moved)
-        {
-            // Performance optimization: Only redraw map if player moved to a different cell
-            int currentCellX = _player.X;
-            int currentCellY = _player.Y;
-
-            if (_previousPlayerCellX != currentCellX || _previousPlayerCellY != currentCellY || !_mapDrawn)
-            {
-                // Player moved to a different cell - invalidate cache and redraw entire map
-                _cachedMapViewport = null;
-                DrawMapAndPlayer();
-                _previousPlayerCellX = currentCellX;
-                _previousPlayerCellY = currentCellY;
-            }
-            else
-            {
-                // Player is still in same cell - just update player and dynamic elements
-                DrawPlayerWithClearing();
-                DrawBullets();
-            }
-        }
     }
 
     private bool ProcessPlayerMovement()
@@ -436,10 +431,13 @@ public class Game : Window
             return false;
 
         // Clean up old key presses (keys not seen recently are considered released)
+        // Use a more aggressive cleanup to detect key releases faster
         DateTime now = DateTime.Now;
         var keysToRemove = new List<KeyCode>();
         foreach (var kvp in _pressedKeys)
         {
+            // Remove keys that haven't been refreshed recently
+            // This detects when a key is released (no more key repeat events)
             if ((now - kvp.Value).TotalMilliseconds > KeyRepeatThresholdMs)
             {
                 keysToRemove.Add(kvp.Key);
@@ -449,6 +447,9 @@ public class Game : Window
         {
             _pressedKeys.Remove(key);
         }
+        
+        // If we just removed keys, prioritize remaining keys for immediate response
+        // This helps when switching from one direction to another
 
         // If no keys are pressed, don't move
         if (_pressedKeys.Count == 0)
@@ -932,6 +933,13 @@ public class Game : Window
                     _gameState.Score += 25;
                     _player.Score += 25;
                     bulletRemoved = true;
+                    
+                    // Check for level completion (host only in multiplayer)
+                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                    {
+                        CheckLevelComplete();
+                    }
+                    
                     break; // Bullet is removed, exit snipe loop
                 }
 
@@ -995,6 +1003,13 @@ public class Game : Window
                     _gameState.Score += 25;
                     _player.Score += 25;
                     bulletRemoved = true;
+                    
+                    // Check for level completion (host only in multiplayer)
+                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                    {
+                        CheckLevelComplete();
+                    }
+                    
                     break; // Bullet is removed, exit snipe loop
                 }
             }
@@ -1104,6 +1119,12 @@ public class Game : Window
                             // Update total snipes count (unreleased snipes are now gone)
                             _gameState.SnipesUndestroyed -= unreleasedSnipes;
                             _gameState.TotalSnipes -= unreleasedSnipes;
+                            
+                            // Check for level completion (host only in multiplayer)
+                            if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                            {
+                                CheckLevelComplete();
+                            }
                         }
 
                         break; // Bullet is removed, exit hive loop
@@ -1194,7 +1215,9 @@ public class Game : Window
                     {
                         // Game over for this player
                         _player.IsAlive = false;
-                        _introScreen.ShowGameOver("GAME OVER");
+                        
+                        // Check if all players are dead (game over for everyone)
+                        CheckGameOver();
                     }
                 }
                 
@@ -1433,7 +1456,8 @@ public class Game : Window
 
                 _snipes.Add(snipe);
                 hive.SpawnSnipe();
-                _gameState.SnipesUndestroyed++;
+                // Note: SnipesUndestroyed doesn't change when spawning - the snipe just moves from "in hive" to "spawned"
+                // It only decreases when a snipe is killed
                 
                 // Publish snipe spawn in multiplayer (host only)
                 if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _mqttClient != null)
@@ -1564,6 +1588,13 @@ public class Game : Window
                 ClearSnipePosition(snipe);
                 _snipes.RemoveAt(i);
                 _gameState.SnipesUndestroyed--;
+                
+                // Check for level completion (host only in multiplayer)
+                if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                {
+                    CheckLevelComplete();
+                }
+                
                 continue;
             }
 
@@ -1827,6 +1858,13 @@ public class Game : Window
                     _gameState.SnipesUndestroyed--;
                     _gameState.Score += 25;
                     _player.Score += 25;
+                    
+                    // Check for level completion (host only in multiplayer)
+                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                    {
+                        CheckLevelComplete();
+                    }
+                    
                     // Snipe is removed, continue to next snipe
                     goto nextSnipe;
                 }
@@ -1862,9 +1900,11 @@ public class Game : Window
                 }
                 else
                 {
-                    // Game over
+                    // Game over for this player
                     _player.IsAlive = false;
-                    _introScreen.ShowGameOver("GAME OVER");
+                    
+                    // Check if all players are dead (game over for everyone)
+                    CheckGameOver();
                 }
             }
 
@@ -2416,8 +2456,14 @@ public class Game : Window
         _player.IsAlive = true;
         _player.Initials = _config.Initials; // Ensure initials are current
         
-        // Reset game state
-        _gameState.Level = 1;
+        // Reset game state (preserve level if it was set by user)
+        // Level is set by IntroScreen before calling ResetGame, so we preserve it
+        int currentLevel = _gameState.Level;
+        if (currentLevel < 1)
+        {
+            currentLevel = 1; // Only reset to 1 if level wasn't set
+        }
+        _gameState.Level = currentLevel;
         _gameState.Score = 0;
         _gameState.TotalHives = 0;
         _gameState.HivesUndestroyed = 0;
@@ -2464,16 +2510,158 @@ public class Game : Window
         _hives.Clear();
         _snipes.Clear();
         int hiveCount = _gameState.GetHiveCountForLevel(_gameState.Level);
+        int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(_gameState.Level);
         _gameState.TotalHives = hiveCount;
         _gameState.HivesUndestroyed = hiveCount;
-        _gameState.TotalSnipes = hiveCount * Hive.SnipesPerHive;
+        _gameState.TotalSnipes = hiveCount * snipesPerHive;
+        // SnipesUndestroyed = all snipes in hives (they haven't spawned yet, but they exist)
+        // This will decrease as snipes spawn (they move from "in hive" to "spawned")
+        // and as spawned snipes are killed
         _gameState.SnipesUndestroyed = _gameState.TotalSnipes;
 
         for (int i = 0; i < hiveCount; i++)
         {
             var (x, y) = FindRandomValidHivePosition();
-            _hives.Add(new Hive(x, y));
+            _hives.Add(new Hive(x, y, snipesPerHive));
         }
+    }
+
+    private void CheckLevelComplete()
+    {
+        // Only check if level is complete (host only in multiplayer)
+        if (_isMultiplayer && (_gameSession == null || _gameSession.Role != GameSessionRole.Host))
+            return;
+            
+        if (_gameState.IsLevelComplete())
+        {
+            // Level complete! Advance to next level
+            StartNextLevel();
+        }
+    }
+    
+    private void CheckGameOver()
+    {
+        // Check if all players have lost all lives
+        bool allPlayersDead = true;
+        List<PlayerScoreInfo> playerScores = new List<PlayerScoreInfo>();
+        
+        if (_isMultiplayer && _gameSession != null)
+        {
+            // Check all network players
+            foreach (var networkPlayer in _networkPlayers.Values)
+            {
+                playerScores.Add(new PlayerScoreInfo
+                {
+                    Initials = networkPlayer.Initials,
+                    Score = networkPlayer.Score
+                });
+                
+                if (networkPlayer.IsAlive && networkPlayer.Lives > 0)
+                {
+                    allPlayersDead = false;
+                }
+            }
+        }
+        else
+        {
+            // Single player
+            playerScores.Add(new PlayerScoreInfo
+            {
+                Initials = _player.Initials,
+                Score = _player.Score
+            });
+            
+            if (_player.IsAlive && _player.Lives > 0)
+            {
+                allPlayersDead = false;
+            }
+        }
+        
+        if (allPlayersDead)
+        {
+            // Game over - show game over screen with player scores
+            _introScreen.ShowGameOver(playerScores);
+        }
+    }
+    
+    private void StartNextLevel()
+    {
+        // Advance to next level
+        _gameState.Level++;
+        
+        // Calculate level info for display
+        int hiveCount = _gameState.GetHiveCountForLevel(_gameState.Level);
+        int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(_gameState.Level);
+        int totalSnipes = hiveCount * snipesPerHive;
+        
+        // Show level start message
+        string levelMessage = $"LEVEL {_gameState.Level} - {hiveCount} HIVES with {totalSnipes} SNIPES";
+        
+        // Reset player positions for all players (random positions)
+        if (_isMultiplayer && _gameSession != null)
+        {
+            // Reset all network players to random positions
+            foreach (var networkPlayer in _networkPlayers.Values)
+            {
+                var (x, y) = FindRandomValidPositionForMultiplayer();
+                networkPlayer.X = x;
+                networkPlayer.Y = y;
+                networkPlayer.PreviousX = x;
+                networkPlayer.PreviousY = y;
+                
+                // Update local player position if this is the local player
+                if (networkPlayer.IsLocal)
+                {
+                    _player.X = x;
+                    _player.Y = y;
+                }
+            }
+        }
+        else
+        {
+            // Single player - reset position
+            var (x, y) = FindRandomValidPosition();
+            _player.X = x;
+            _player.Y = y;
+        }
+        
+        // Clear all game entities
+        _bullets.Clear();
+        _hives.Clear();
+        _snipes.Clear();
+        
+        // Initialize new level (host only in multiplayer)
+        if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+        {
+            InitializeHives();
+            
+            // Publish game state snapshot in multiplayer
+            if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _mqttClient != null)
+            {
+                // Small delay to ensure subscriptions are active
+                Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+                {
+                    PublishGameStateSnapshot();
+                    return false; // One-time
+                });
+            }
+        }
+        
+        // Show clearing effect with level message
+        _introScreen.StartClearingEffect(levelMessage, isStartingNewGame: false);
+        _mapDrawn = false;
+        _pressedKeys.Clear();
+        
+        // Reset cached values
+        _cachedMapViewport = null;
+        _cachedDateTime = DateTime.MinValue;
+        _cachedHivesUndestroyed = -1;
+        _cachedSnipesUndestroyed = -1;
+        _cachedLevel = -1;
+        _previousPlayerCellX = -1;
+        _previousPlayerCellY = -1;
+        _previousPlayerViewportX = -1;
+        _previousPlayerViewportY = -1;
     }
 
     private (int x, int y) FindRandomValidHivePosition()
@@ -2866,6 +3054,22 @@ public class Game : Window
     
     private async Task StartMultiplayerGame(int maxPlayers)
     {
+        // Single player mode - no MQTT, just start the game locally
+        if (maxPlayers == 1)
+        {
+            // Ensure multiplayer is disabled
+            _isMultiplayer = false;
+            _gameSession = null;
+            _mqttClient = null;
+            _networkPlayers.Clear();
+            
+            // Reset game state and start
+            ResetGame();
+            _introScreen.StartGame();
+            return;
+        }
+        
+        // Multiplayer mode (2+ players) - use MQTT
         try
         {
             // Create MQTT client
@@ -3521,9 +3725,11 @@ public class Game : Window
                 
                 // Update hives from host
                 _hives.Clear();
+                // Calculate snipes per hive from level (needed for Hive constructor)
+                int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(state.Level);
                 foreach (var hiveState in state.Hives)
                 {
-                    var hive = new Hive(hiveState.X, hiveState.Y)
+                    var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive)
                     {
                         Hits = hiveState.Hits,
                         IsDestroyed = hiveState.IsDestroyed,
@@ -3658,7 +3864,8 @@ public class Game : Window
                             DirectionY = update.DirectionY
                         };
                         _snipes.Add(snipe);
-                        _gameState.SnipesUndestroyed++;
+                        // Note: SnipesUndestroyed doesn't change when spawning - the snipe just moves from "in hive" to "spawned"
+                        // It only decreases when a snipe is killed
                     }
                     else if (update.Action == "moved")
                     {

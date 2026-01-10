@@ -38,17 +38,14 @@ It's not perfect, I know that - some of the code committed, I'm far from being 1
 It's been an interesting and sometimes frustrating journey so far working in this way, and while as I say above the code is far from being 100% perfect, the game has developed at a pace that I wasn't able to commit my own personal time to.
 
 So what's left to do:
-- Levels
-  - Currently the game doesn't know when a level is complete (i.e. all Hives and Snipes are destroyed)
-  - Incremental difficulty as Level's increase, i.e. more Snipes per hive,  more Hives
-  - Ability to start the game at a given level (and for it to know based on level number how many hives/snipes to use)
 - Multiplayer Enhancements
   - ✅ Start Multiplayer Game (implemented - prompts for player count, generates 6-character game ID, 60-second join window)
   - ✅ Join Multiplayer Game (implemented - prompts for game ID, waits for game to start)
   - ✅ Network game play (implemented - real-time synchronization of player positions, bullets, hives, snipes)
   - ⚠️ Full game state synchronization (scores, lives) - partially implemented, needs refinement
-  - ❌ Multiplayer game end/results screen (after all players lose lives, show rankings and scores)
+  - ✅ Multiplayer game end/results screen (implemented - shows rankings and scores when all players lose lives)
   - ❌ Option to restart another game with all the same players
+  - ❌ Level progression synchronization in multiplayer (currently host-only)
 
 
 
@@ -72,17 +69,19 @@ So what's left to do:
 - Default initials are "AA" if not set
 
 **Clearing Effects**
-- Animated clearing effect when starting a new game or respawning
+- Animated clearing effect when starting a new game, respawning, or starting a new level
 - Expanding rectangle of '*' characters reveals the map underneath
 - Messages displayed during clearing:
-  - "Level 1" when starting a new game
+  - "LEVEL n - x HIVES with y SNIPES" when starting a new level
   - "X Lives Left" when player loses a life (but still has lives remaining)
-  - "GAME OVER" when all lives are lost
 
-**Game Over**
-- When player loses all lives, "GAME OVER" message is displayed
+**Game Over Screen**
+- When all players lose all lives, animated "GAME OVER" banner scrolls in from the left
+- Banner displays "GAME OVER" with space between words (white block text on blue background)
+- Shows "-< SCORES >-" header followed by player scores sorted by score (descending)
+- Top player displayed in cyan, all other players in yellow
 - Game stops (no movement, bullets, snipes)
-- Press any key to return to the intro screen
+- Press ENTER to return to the intro screen
 - Game state is fully reset when starting a new game after game over
 
 ### Current Features
@@ -95,7 +94,8 @@ So what's left to do:
 - Player can move in 8 directions (cardinal and diagonal)
 - Smooth continuous movement while keys are held down
 - Player respawns at a random valid position when hit by a snipe
-- Game ends when all lives are lost
+- Player position resets to random location at the start of each new level
+- Game ends when all players lose all lives (multiplayer) or player loses all lives (single player)
 
 **Map**
 - Forever-scrolling maze map that wraps around both horizontally and vertically
@@ -108,9 +108,12 @@ So what's left to do:
 - Hives are small 2x2 rectangular boxes made of corner characters (╔ ╗ ╚ ╝)
 - Hives glow between cyan and green colors, changing every 75ms
 - Each hive has its own flash rate that decreases by 1/3 each time it's hit (minimum 10ms)
-- At level 1, there are 5 hives randomly placed across the map
-- Hive count increases by 1 every 5 levels
-- Hives spawn snipes over time (each hive starts with 20 snipes: 10 type 'A', 10 type 'B')
+- **Level-based configuration**:
+  - Level 1: 4 hives, each with 10 snipes
+  - Each level: +1 snipe per hive
+  - Every 4 levels: +1 hive
+  - Example: Level 1 = 4 hives × 10 snipes, Level 2 = 4 hives × 11 snipes, Level 5 = 5 hives × 14 snipes
+- Hives spawn snipes over time (snipes split evenly between type 'A' and type 'B')
 - Hives are positioned randomly but never overlap walls or the player
 - **Hives can be destroyed**: Hives require 3 direct bullet hits to be destroyed
 - When destroyed, all unreleased snipes from that hive are killed, and the player gains 500 points plus 25 points per unreleased snipe
@@ -210,7 +213,32 @@ So what's left to do:
 
 ## Recent Changes
 
-### Multiplayer Implementation (Latest)
+### Bug Fixes (Latest)
+- **Snipe Count Display Fix**: Fixed incorrect snipe count display (was showing 80/40 instead of 40/40)
+  - Issue: `SnipesUndestroyed` was being incremented when snipes spawned, causing double counting
+  - Fix: `SnipesUndestroyed` now correctly represents all snipes (in hives + spawned), only decreases when snipes are killed or hives are destroyed
+  - Status bar now correctly shows "40/40" at start of Level 1 (40 snipes undestroyed out of 40 total)
+
+### Level System Implementation
+- **Level Progression**: Implemented complete level system with automatic progression
+  - Level 1 starts with 4 hives, each with 10 snipes
+  - Each level increases snipes per hive by 1
+  - Every 4 levels adds 1 additional hive
+  - Level completion when all hives and all snipes are destroyed
+- **Level Start Screen**: Animated clearing screen shows "LEVEL n - x HIVES with y SNIPES" at start of each level
+- **Player Respawn**: All players reset to random positions at the start of each new level
+- **Level State Management**: Proper level tracking and progression in both single-player and multiplayer modes
+
+### Game Over Screen (Latest)
+- **Animated Banner**: "GAME OVER" banner animates in from the left (white block text on blue background)
+- **Banner Spacing**: Space between "GAME" and "OVER" words for better readability
+- **Player Scores Display**: Shows all players sorted by score (descending) with "-< SCORES >-" header
+- **Visual Hierarchy**: Top player displayed in cyan, all other players in yellow
+- **Key Handling**: ENTER key returns to intro screen (other keys ignored)
+- **Code Organization**: Moved game over screen to separate `GameOverScreen` class for better separation of concerns
+- **Multiplayer Support**: Game over triggers when ALL players lose all lives, showing all player scores
+
+### Multiplayer Implementation
 - **MQTT Networking**: Implemented full multiplayer support using MQTT protocol
 - **Game Discovery**: Host can create games with 6-character game IDs, clients can join by ID
 - **Real-time Synchronization**: Player positions, bullets, hives, and snipes synchronized across all clients
@@ -220,6 +248,7 @@ So what's left to do:
 - **Respawn Synchronization**: Player respawn positions properly synchronized across network
 - **Initials Synchronization**: Player initials correctly displayed for all players
 - **Network Message System**: Comprehensive DTO system for all game events (positions, bullets, game state)
+- **Single Player Mode**: When starting multiplayer with 1 player, game starts immediately without MQTT (local play only)
 
 ### Intro Screen and Menu System
 - **Intro Screen**: Added animated NSNIPES banner that scrolls in from the left over 2 seconds
@@ -227,15 +256,17 @@ So what's left to do:
 - **Multiplayer Menu Options**: Added "Start Multiplayer" and "Join Multiplayer" options
 - **Waiting Screen**: Multiplayer waiting screen showing player count, game ID, and join notifications
 - **Initials System**: Players can set and save their 2-character initials (persisted to nsnipes.json)
-- **Clearing Effects**: Animated clearing effect when starting game or respawning, with messages
-- **Game Over Screen**: Proper game over screen with key press to return to intro
+- **Clearing Effects**: Animated clearing effect when starting game, respawning, or starting new level, with messages
 - **Game Reset**: Full game state reset when starting a new game after game over
-- **Code Refactoring**: Moved all intro screen code to separate `IntroScreen` class for better organization
+- **Code Refactoring**: Moved all intro screen code to separate `IntroScreen` class, game over to `GameOverScreen` class for better organization
 
 ### Player Movement Improvements
 - **Continuous Movement**: Player movement now supports smooth continuous movement while keys are held
 - **Key State Tracking**: Improved keyboard handling for more natural direction changes
 - **Movement Responsiveness**: Player can change direction immediately when pressing new movement keys
+- **Instant Direction Changes**: Reduced key release detection delay from 150ms to 60ms for faster response
+- **Immediate Movement Processing**: New movement keys trigger immediate movement processing (not just on timer), eliminating stutter when changing directions
+- **Smooth Transitions**: When switching from one direction to another (e.g., holding Left, then pressing Up), movement responds instantly without pause
 
 ### Combat and Scoring System
 - **Bullet-Snipe Collision**: Implemented collision detection between bullets and snipes (both directions)
@@ -318,6 +349,9 @@ So what's left to do:
 ✅ Bullet-hive collision and damage (3 hits to destroy)  
 ✅ Player-snipe collision and life loss  
 ✅ Player respawn on death (random valid position)  
+✅ **Level completion detection** (when all hives and snipes destroyed)  
+✅ **Level progression** (automatic advancement to next level with increased difficulty)  
+✅ **Level start screen** (animated clearing with level info)  
 ✅ Game over detection and screen  
 
 ### Game Entities
@@ -334,16 +368,19 @@ So what's left to do:
 ✅ Intro screen with animated banner  
 ✅ Menu system with navigation  
 ✅ Initials input and persistence (saved to nsnipes.json)  
-✅ Clearing effect animations (game start, respawn, game over)  
+✅ Clearing effect animations (game start, respawn, level start)  
 ✅ Status bar display (hives, snipes, lives, level, score)  
-✅ Game over screen with key press to return to menu  
+✅ **Game over screen** (animated "GAME OVER" banner, player scores with "-< SCORES >-" header, ENTER to return)  
 ✅ Multiplayer waiting screen with player count and join notifications  
 
 ### Game Systems
 ✅ Map scrolling and wrapping (horizontal and vertical)  
 ✅ Game state tracking (level, score, counts)  
+✅ **Level system with automatic progression** (level completion detection, level advancement, level-based hive/snipe counts)  
+✅ **Level start screen** (animated clearing with level info: "LEVEL n - x HIVES with y SNIPES")  
 ✅ Scoring system (25 points per snipe, 500 + 25 per unreleased snipe for hives)  
 ✅ Game reset functionality (fully resets when starting new game after game over)  
+✅ **Game over screen** (animated banner, player scores display, ENTER to return)  
 ✅ Player initials customization  
 ✅ Configuration persistence (initials saved between sessions)  
 
@@ -362,8 +399,9 @@ So what's left to do:
 
 **Game Discovery and Joining**
 - Host can start a multiplayer game (1-5 players)
-- 6-character alphanumeric game ID for easy sharing
-- 60-second join window for players to join
+- **Single Player Mode**: If host selects 1 player, game starts immediately without MQTT (local play only, no network overhead)
+- **Multiplayer Mode**: If host selects 2-5 players, uses MQTT networking with 60-second join window
+- 6-character alphanumeric game ID for easy sharing (only used for 2+ player games)
 - Real-time player count updates ("X of Y players joined")
 - Player join notifications ("[Initials] joined!")
 - Game automatically starts after join window expires or max players reached
@@ -399,14 +437,13 @@ So what's left to do:
 
 - Initial position synchronization may have minor timing issues
 - Full game state synchronization (scores, lives) still being refined
-- No level progression in multiplayer yet
-- No game end/results screen for multiplayer yet
+- Level progression in multiplayer is host-only (clients receive level updates but don't trigger progression)
 
 ## Not Yet Implemented
 
-❌ Level progression (automatic level advancement when all hives destroyed)  
 ❌ High score system  
-❌ Multiplayer game end/results screen  
+❌ Option to restart multiplayer game with same players  
+❌ Level progression synchronization in multiplayer (currently host-only)  
 ❌ Power-ups or special abilities  
 ❌ Different bullet types  
 ❌ Boss hives or special enemies  
