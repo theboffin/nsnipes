@@ -1,7 +1,8 @@
-﻿using Terminal.Gui;
+using Terminal.Gui;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using NSnipes.GrpcServer;
 
 namespace NSnipes;
 
@@ -46,7 +47,7 @@ public class Game : Window
     private GameConfig _config;
     
     // Multiplayer
-    private MqttGameClient? _mqttClient;
+    private GrpcGameClient? _grpcClient;
     private GameSession? _gameSession;
     private Dictionary<string, PlayerNetwork> _networkPlayers = new Dictionary<string, PlayerNetwork>();
     private bool _isMultiplayer = false;
@@ -97,10 +98,10 @@ public class Game : Window
             _mapDrawn = false;
             _pressedKeys.Clear(); // Clear any lingering pressed keys
             // Disconnect from multiplayer if connected
-            if (_mqttClient != null)
+            if (_grpcClient != null)
             {
-                _mqttClient.Dispose();
-                _mqttClient = null;
+                _grpcClient.Dispose();
+                _grpcClient = null;
             }
             _gameSession = null;
             _isMultiplayer = false;
@@ -176,9 +177,11 @@ public class Game : Window
 
         Application.SizeChanging += (s, e) =>
         {
-            if (!_introScreen.IsActive)
+            // SizeChanging fires before the size changes, so we just invalidate the cache
+            // The dimension check in the timers will detect the change and redraw
+            if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                DrawMapAndPlayer();
+                _cachedMapViewport = null;
             }
         };
 
@@ -205,6 +208,23 @@ public class Game : Window
             }
             else if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
+                // Check if window dimensions have changed (e.g., from resize)
+                if (Application.Driver != null)
+                {
+                    int currentWidth = Application.Driver.Cols;
+                    int currentHeight = Application.Driver.Rows;
+                    int frameWidth = currentWidth;
+                    int frameHeight = currentHeight - StatusBarHeight;
+                    
+                    // If dimensions changed, invalidate cache and redraw everything
+                    if (frameWidth != _lastFrameWidth || frameHeight != _lastFrameHeight)
+                    {
+                        _cachedMapViewport = null;
+                        DrawMapAndPlayer();
+                        return true;
+                    }
+                }
+                
                 // Process continuous movement based on pressed keys
                 bool playerMoved = ProcessPlayerMovement();
                 if (playerMoved)
@@ -226,6 +246,23 @@ public class Game : Window
         {
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_introScreen.IsActive)
             {
+                // Check if window dimensions have changed (e.g., from resize) - check frequently for responsive resize
+                if (Application.Driver != null)
+                {
+                    int currentWidth = Application.Driver.Cols;
+                    int currentHeight = Application.Driver.Rows;
+                    int frameWidth = currentWidth;
+                    int frameHeight = currentHeight - StatusBarHeight;
+                    
+                    // If dimensions changed, invalidate cache and redraw everything
+                    if (frameWidth != _lastFrameWidth || frameHeight != _lastFrameHeight)
+                    {
+                        _cachedMapViewport = null;
+                        DrawMapAndPlayer();
+                        return true;
+                    }
+                }
+                
                 UpdateBullets();
                 DrawFrame();
             }
@@ -242,13 +279,27 @@ public class Game : Window
             }
             return true;
         });
+        
+        // Periodic position update timer for multiplayer (publish position every 200ms even if not moving)
+        // This ensures other players can see this player even when stationary
+        Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+        {
+            if (_isMultiplayer && _gameSession != null && _gameSession.Status == GameSessionStatus.Playing && 
+                _grpcClient != null && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver)
+            {
+                // Force position publish by resetting throttle - this ensures position is sent every 200ms
+                _lastPositionPublish = DateTime.Now.AddMilliseconds(-100); // Reset throttle to allow publish
+                PublishPlayerPosition();
+            }
+            return true;
+        });
 
         // Timer for snipe spawning and movement (200ms) - only host runs this
         Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
         {
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                // Only host spawns and updates snipes - clients receive updates via MQTT
+                // Only host spawns and updates snipes - clients receive updates via gRPC
                 if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
                 {
                     SpawnSnipes();
@@ -411,7 +462,7 @@ public class Game : Window
                 _bullets.Add(bullet);
                 
                 // Publish bullet fired in multiplayer
-                if (_isMultiplayer && _gameSession != null && _mqttClient != null)
+                if (_isMultiplayer && _gameSession != null && _grpcClient != null)
                 {
                     PublishBulletFired(bullet);
                 }
@@ -597,7 +648,7 @@ public class Game : Window
                 _cachedMapViewport = null;
                 
                 // Publish position update in multiplayer
-                if (_isMultiplayer && _gameSession != null && _mqttClient != null)
+                if (_isMultiplayer && _gameSession != null && _grpcClient != null)
                 {
                     PublishPlayerPosition();
                 }
@@ -624,8 +675,23 @@ public class Game : Window
         int frameWidth = currentWidth;
         int frameHeight = currentHeight - StatusBarHeight; // Account for status bar
 
+        // Check if dimensions changed - if so, we need to clear and redraw everything
+        bool dimensionsChanged = (frameWidth != _lastFrameWidth || frameHeight != _lastFrameHeight);
+        
         _lastFrameWidth = frameWidth;
         _lastFrameHeight = frameHeight;
+        
+        // If dimensions changed, clear the entire game area first (especially important if window got smaller)
+        if (dimensionsChanged && Application.Driver != null)
+        {
+            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Black, Color.Black));
+            // Clear from status bar to bottom of screen
+            for (int r = StatusBarHeight; r < currentHeight; r++)
+            {
+                Application.Driver.Move(0, r);
+                Application.Driver.AddStr(new string(' ', currentWidth));
+            }
+        }
 
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
 
@@ -775,7 +841,7 @@ public class Game : Window
                 }
 
                 // Publish bullet expired in multiplayer
-                if (_isMultiplayer && _gameSession != null && _mqttClient != null && bullet.PlayerId == _gameSession.PlayerId)
+                if (_isMultiplayer && _gameSession != null && _grpcClient != null && bullet.PlayerId == _gameSession.PlayerId)
                 {
                     PublishBulletUpdate(bullet, "expired");
                 }
@@ -792,7 +858,7 @@ public class Game : Window
             bullet.Update();
             
             // Publish bullet update in multiplayer (for local bullets only)
-            if (_isMultiplayer && _gameSession != null && _mqttClient != null && bullet.PlayerId == _gameSession.PlayerId)
+            if (_isMultiplayer && _gameSession != null && _grpcClient != null && bullet.PlayerId == _gameSession.PlayerId)
             {
                 PublishBulletUpdate(bullet, "updated");
             }
@@ -1090,7 +1156,7 @@ public class Game : Window
                         _cachedMapViewport = null;
 
                         // Publish bullet hit in multiplayer (host only)
-                        if (_isMultiplayer && _gameSession != null && _mqttClient != null && 
+                        if (_isMultiplayer && _gameSession != null && _grpcClient != null && 
                             _gameSession.Role == GameSessionRole.Host && bullet.PlayerId == _gameSession.PlayerId)
                         {
                             PublishBulletUpdate(bullet, "hit", "hive", $"hive_{hive.X}_{hive.Y}");
@@ -1142,7 +1208,7 @@ public class Game : Window
     
     private void CheckBulletPlayerCollision(Bullet bullet, int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY)
     {
-        if (_gameSession == null || _mqttClient == null)
+        if (_gameSession == null || _grpcClient == null)
             return;
         
         int bulletWorldX = (int)Math.Round(bullet.X);
@@ -1167,6 +1233,48 @@ public class Game : Window
                 // Bullet hit player
                 networkPlayer.Lives--;
                 networkPlayer.IsAlive = networkPlayer.Lives > 0;
+                
+                // Get fresh map to ensure we have correct character for clearing
+                var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+                
+                // Clear bullet at collision point
+                int viewportX = bulletWorldX - mapOffsetX;
+                int viewportY = bulletWorldY - mapOffsetY;
+                if (viewportX >= 0 && viewportX < frameWidth &&
+                    viewportY >= 0 && viewportY < frameHeight &&
+                    freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
+                    viewportX >= 0 && viewportX < freshMap[viewportY].Length)
+                {
+                    Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
+                    Application.Driver.AddRune(freshMap[viewportY][viewportX]);
+                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                }
+                
+                // Also clear bullet's previous position if different
+                int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                
+                if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                {
+                    int prevViewportX = prevBulletWorldX - mapOffsetX;
+                    int prevViewportY = prevBulletWorldY - mapOffsetY;
+                    if (prevViewportX >= 0 && prevViewportX < frameWidth &&
+                        prevViewportY >= 0 && prevViewportY < frameHeight &&
+                        freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
+                        prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
+                    {
+                        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                        Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
+                        Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
+                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                    }
+                }
+                
+                // Invalidate cached map since we're removing a bullet
+                _cachedMapViewport = null;
                 
                 // Publish bullet hit
                 PublishBulletUpdate(bullet, "hit", "player", networkPlayer.PlayerId);
@@ -1194,19 +1302,11 @@ public class Game : Window
                         _cachedMapViewport = null;
                         
                         // Immediately publish new position to other players (bypass throttling)
-                        if (_isMultiplayer && _gameSession != null && _mqttClient != null)
+                        if (_isMultiplayer && _gameSession != null && _grpcClient != null)
                         {
                             _positionSequence++;
-                            var posUpdate = new PlayerPositionUpdateMessage
-                            {
-                                PlayerId = _gameSession.PlayerId,
-                                X = _player.X,  // World coordinate
-                                Y = _player.Y,  // World coordinate
-                                Timestamp = DateTime.UtcNow,
-                                Sequence = _positionSequence
-                            };
-                            _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/player/{_gameSession.PlayerId}/position", posUpdate);
-                            _lastPositionPublish = DateTime.Now;
+                            // Use the standard position publish method
+                            PublishPlayerPosition();
                         }
                         
                         _introScreen.StartClearingEffect($"{_player.Lives} Lives Left");
@@ -1460,7 +1560,7 @@ public class Game : Window
                 // It only decreases when a snipe is killed
                 
                 // Publish snipe spawn in multiplayer (host only)
-                if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _mqttClient != null)
+                if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _grpcClient != null)
                 {
                     PublishSnipeSpawn(snipe);
                 }
@@ -1470,53 +1570,61 @@ public class Game : Window
     
     private void PublishSnipeSpawn(Snipe snipe)
     {
-        if (_gameSession == null || _mqttClient == null)
+        if (_gameSession == null || _grpcClient == null)
             return;
         
-        var update = new SnipeUpdateInfo
+        var gameMessage = new GameMessage
         {
-            SnipeId = $"snipe_{snipe.X}_{snipe.Y}_{DateTime.UtcNow.Ticks}",
+            GameId = _gameSession.GameId,
+            PlayerId = _gameSession.PlayerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Snipes = new SnipeUpdates()
+        };
+        gameMessage.Snipes.Updates.Add(new SnipeUpdateInfo
+        {
+            SnipeId = snipe.SnipeId,
             Action = "spawned",
             X = snipe.X,
             Y = snipe.Y,
             DirectionX = snipe.DirectionX,
             DirectionY = snipe.DirectionY,
-            Type = snipe.Type,
-            Timestamp = DateTime.UtcNow
-        };
-        
-        var updates = new SnipeUpdatesMessage
-        {
-            Updates = new List<SnipeUpdateInfo> { update }
-        };
-        
-        _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/snipes", updates);
+            Type = snipe.Type.ToString()
+        });
+        _ = _grpcClient.SendGameMessageAsync(gameMessage);
     }
     
     private void PublishSnipeUpdates()
     {
-        if (_gameSession == null || _mqttClient == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
             return;
         
         // Publish all current snipe positions (periodic update)
         // IMPORTANT: All coordinates must be WORLD/MAP coordinates, not viewport
-        var updates = new SnipeUpdatesMessage
-        {
-            Updates = _snipes.Where(s => s.IsAlive).Select(s => new SnipeUpdateInfo
-            {
-                SnipeId = $"snipe_{s.X}_{s.Y}_{s.LastMoveTime.Ticks}",
-                Action = "moved",
-                X = s.X,  // World coordinate (map space)
-                Y = s.Y,  // World coordinate (map space)
-                DirectionX = s.DirectionX,
-                DirectionY = s.DirectionY,
-                Timestamp = DateTime.UtcNow
-            }).ToList()
-        };
+        var aliveSnipes = _snipes.Where(s => s.IsAlive).ToList();
         
-        if (updates.Updates.Count > 0)
+        if (aliveSnipes.Count > 0)
         {
-            _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/snipes", updates);
+            var gameMessage = new GameMessage
+            {
+                GameId = _gameSession.GameId,
+                PlayerId = _gameSession.PlayerId,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                Snipes = new SnipeUpdates()
+            };
+            foreach (var s in aliveSnipes)
+            {
+                gameMessage.Snipes.Updates.Add(new SnipeUpdateInfo
+                {
+                    SnipeId = s.SnipeId,
+                    Action = "moved",
+                    X = s.X,  // World coordinate (map space)
+                    Y = s.Y,  // World coordinate (map space)
+                    DirectionX = s.DirectionX,
+                    DirectionY = s.DirectionY,
+                    Type = s.Type.ToString()
+                });
+            }
+            _ = _grpcClient.SendGameMessageAsync(gameMessage);
         }
     }
 
@@ -2475,7 +2583,7 @@ public class Game : Window
         _hives.Clear();
         _snipes.Clear();
         
-        // Only host initializes hives - clients will receive them via MQTT
+        // Only host initializes hives - clients will receive them via gRPC
         if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
         {
             InitializeHives();
@@ -2636,7 +2744,7 @@ public class Game : Window
             InitializeHives();
             
             // Publish game state snapshot in multiplayer
-            if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _mqttClient != null)
+            if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _grpcClient != null)
             {
                 // Small delay to ensure subscriptions are active
                 Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
@@ -3054,13 +3162,13 @@ public class Game : Window
     
     private async Task StartMultiplayerGame(int maxPlayers)
     {
-        // Single player mode - no MQTT, just start the game locally
+        // Single player mode - no network, just start the game locally
         if (maxPlayers == 1)
         {
             // Ensure multiplayer is disabled
             _isMultiplayer = false;
             _gameSession = null;
-            _mqttClient = null;
+            _grpcClient = null;
             _networkPlayers.Clear();
             
             // Reset game state and start
@@ -3069,24 +3177,28 @@ public class Game : Window
             return;
         }
         
-        // Multiplayer mode (2+ players) - use MQTT
+        // Multiplayer mode (2+ players) - use gRPC
+        // Show "Connecting..." screen immediately so user knows something is happening
+        _introScreen.ShowWaitingForPlayers("Connecting...", maxPlayers, isHost: true);
+        
         try
         {
-            // Create MQTT client
-            _mqttClient = new MqttGameClient();
-            _mqttClient.OnMessageReceived += HandleMqttMessage;
-            _mqttClient.OnConnected += () =>
+            // Create gRPC client
+            _grpcClient = new GrpcGameClient();
+            _grpcClient.OnGameMessageReceived += HandleGrpcMessage;
+            _grpcClient.OnConnected += () =>
             {
                 // Connection successful
             };
-            _mqttClient.OnConnectionError += (error) =>
+            _grpcClient.OnConnectionError += (error) =>
             {
                 // Handle connection error - show message to user
                 // For now, just log or handle silently
             };
             
-            // Connect to broker
-            bool connected = await _mqttClient.ConnectAsync();
+            // Connect to gRPC server using configured address
+            string serverUrl = _config.GetServerUrl();
+            bool connected = await _grpcClient.ConnectAsync(serverUrl);
             if (!connected)
             {
                 // Failed to connect - return to menu
@@ -3094,11 +3206,49 @@ public class Game : Window
                 return;
             }
             
+            // Generate player ID first
+            var playerId = GameSession.GeneratePlayerId();
+            
+            // Create game on server
+            string gameId;
+            try
+            {
+                gameId = await _grpcClient.CreateGameAsync(
+                    playerId,
+                    _player.Initials,
+                    maxPlayers,
+                    _gameState.Level
+                );
+                
+                // Validate game ID was returned
+                if (string.IsNullOrEmpty(gameId))
+                {
+                    // Failed to get game ID - show error and return to menu
+                    _introScreen.ShowWaitingForPlayers("ERROR: No game ID returned", maxPlayers, isHost: true);
+                    // Wait a moment so user can see the error
+                    await Task.Delay(2000);
+                    _introScreen.Show();
+                    return;
+                }
+                
+                // Update waiting screen with actual game ID immediately
+                _introScreen.ShowWaitingForPlayers(gameId, maxPlayers, isHost: true);
+            }
+            catch (Exception ex)
+            {
+                // Failed to create game - show error message
+                _introScreen.ShowWaitingForPlayers($"ERROR: {ex.Message}", maxPlayers, isHost: true);
+                // Wait a moment so user can see the error
+                await Task.Delay(2000);
+                _introScreen.Show();
+                return;
+            }
+            
             // Create game session
             _gameSession = new GameSession
             {
-                GameId = GameSession.GenerateGameId(),
-                PlayerId = GameSession.GeneratePlayerId(),
+                GameId = gameId,
+                PlayerId = playerId,
                 Role = GameSessionRole.Host,
                 Status = GameSessionStatus.WaitingForPlayers,
                 MaxPlayers = maxPlayers,
@@ -3117,26 +3267,15 @@ public class Game : Window
             };
             _gameSession.Players.Add(hostPlayer);
             
-            // Publish game to active games list
-            var gameInfo = new GameInfoMessage
+            // Start game stream
+            bool streamStarted = await _grpcClient.StartGameStreamAsync(_gameSession.GameId, _gameSession.PlayerId);
+            if (!streamStarted)
             {
-                GameId = _gameSession.GameId,
-                HostPlayerId = _gameSession.PlayerId,
-                HostInitials = _player.Initials,
-                MaxPlayers = maxPlayers,
-                CurrentPlayers = 1,
-                Status = "waiting",
-                Level = _gameState.Level,
-                CreatedAt = _gameSession.CreatedAt
-            };
+                _introScreen.Show();
+                return;
+            }
             
-            await _mqttClient.PublishJsonAsync($"nsnipes/games/active", gameInfo, retain: true);
-            await _mqttClient.PublishJsonAsync($"nsnipes/games/{_gameSession.GameId}/info", gameInfo, retain: true);
-            
-            // Subscribe to join requests
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/join");
-            
-            // Show waiting screen
+            // Ensure waiting screen shows the actual game ID (in case it wasn't updated earlier)
             _introScreen.ShowWaitingForPlayers(_gameSession.GameId, maxPlayers, isHost: true);
             
             // Start timer to publish player count updates
@@ -3171,14 +3310,39 @@ public class Game : Window
     {
         try
         {
-            // Create MQTT client
-            _mqttClient = new MqttGameClient();
-            _mqttClient.OnMessageReceived += HandleMqttMessage;
+            // Create gRPC client
+            _grpcClient = new GrpcGameClient();
+            _grpcClient.OnGameMessageReceived += HandleGrpcMessage;
             
-            // Connect to broker
-            bool connected = await _mqttClient.ConnectAsync();
+            // Connect to gRPC server using configured address
+            string serverUrl = _config.GetServerUrl();
+            bool connected = await _grpcClient.ConnectAsync(serverUrl);
             if (!connected)
             {
+                _introScreen.Show();
+                return;
+            }
+            
+            // Generate player ID
+            var playerId = GameSession.GeneratePlayerId();
+            
+            // Join game on server
+            JoinResponse joinResponse;
+            try
+            {
+                joinResponse = await _grpcClient.JoinGameAsync(gameId.ToUpper(), playerId, _player.Initials);
+            }
+            catch (Exception)
+            {
+                // Failed to join game - return to menu
+                // Note: Error handling is done via exception, OnConnectionError is for connection-level errors
+                _introScreen.Show();
+                return;
+            }
+            
+            if (!joinResponse.Accepted)
+            {
+                // Join rejected - return to menu
                 _introScreen.Show();
                 return;
             }
@@ -3187,37 +3351,30 @@ public class Game : Window
             _gameSession = new GameSession
             {
                 GameId = gameId.ToUpper(),
-                PlayerId = GameSession.GeneratePlayerId(),
+                PlayerId = playerId,
                 Role = GameSessionRole.Client,
                 Status = GameSessionStatus.WaitingForPlayers
             };
             
             _isMultiplayer = true;
             
-            // Subscribe to game info and join responses
-            await _mqttClient.SubscribeAsync($"nsnipes/games/{_gameSession.GameId}/info");
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/join");
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/players/joined");
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/players/count");
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/start");
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/state"); // Game state snapshot
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/snipes"); // Snipe updates
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/hives"); // Hive updates
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/player/+/position"); // Player positions
-            await _mqttClient.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/player/+/bullet"); // Bullet updates
-            
-            // Publish join request
-            var joinRequest = new JoinRequestMessage
+            // Start game stream - this must happen before we can receive player join notifications
+            bool streamStarted = await _grpcClient.StartGameStreamAsync(_gameSession.GameId, _gameSession.PlayerId);
+            if (!streamStarted)
             {
-                PlayerId = _gameSession.PlayerId,
-                Initials = _player.Initials,
-                Timestamp = DateTime.UtcNow
-            };
+                _introScreen.Show();
+                return;
+            }
             
-            await _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/join", joinRequest);
+            // If server provided initial state, apply it
+            if (joinResponse.InitialState != null)
+            {
+                HandleGameStateSnapshot(joinResponse.InitialState);
+            }
             
-            // Show waiting screen
-            _introScreen.ShowWaitingForPlayers(_gameSession.GameId, 1, isHost: false);
+            // Show waiting screen (maxPlayers will be updated when we receive PlayerJoinNotification or PlayerCountUpdate)
+            // For now, use a default value - it will be updated when we receive the first player count message
+            _introScreen.ShowWaitingForPlayers(_gameSession.GameId, 2, isHost: false);
         }
         catch (Exception)
         {
@@ -3225,231 +3382,217 @@ public class Game : Window
         }
     }
     
-    private void HandleMqttMessage(string topic, string payload)
+    private void HandleGrpcMessage(GameMessage message)
     {
         try
         {
-            if (_gameSession == null)
+            if (_gameSession == null || message.GameId != _gameSession.GameId)
                 return;
             
-            // Handle join requests (host only)
-            if (topic == $"nsnipes/game/{_gameSession.GameId}/join" && _gameSession.Role == GameSessionRole.Host)
-            {
-                var joinRequest = JsonSerializer.Deserialize<JoinRequestMessage>(payload);
-                if (joinRequest != null && _gameSession.Status == GameSessionStatus.WaitingForPlayers)
-                {
-                    // Check if player already joined
-                    if (_gameSession.Players.Any(p => p.PlayerId == joinRequest.PlayerId))
-                        return;
-                    
-                    // Check if we have room
-                    if (_gameSession.CurrentPlayers >= _gameSession.MaxPlayers)
-                    {
-                        // Send rejection
-                        var rejectResponse = new JoinResponseMessage
-                        {
-                            Accepted = false,
-                            ErrorMessage = "Game is full"
-                        };
-                        _mqttClient?.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/join", rejectResponse);
-                        return;
-                    }
-                    
-                    // Accept player
-                    _gameSession.CurrentPlayers++;
-                    int playerNumber = _gameSession.CurrentPlayers;
-                    
-                    var playerInfo = new NetworkPlayerInfo
-                    {
-                        PlayerId = joinRequest.PlayerId,
-                        Initials = joinRequest.Initials,
-                        PlayerNumber = playerNumber
-                    };
-                    _gameSession.Players.Add(playerInfo);
-                    
-                    // Send acceptance
-                    var acceptResponse = new JoinResponseMessage
-                    {
-                        Accepted = true,
-                        PlayerId = joinRequest.PlayerId,
-                        PlayerNumber = playerNumber
-                    };
-                    _mqttClient?.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/join", acceptResponse, retain: true);
-                    
-                    // Publish join notification
-                    var joinNotification = new PlayerJoinNotificationMessage
-                    {
-                        PlayerId = joinRequest.PlayerId,
-                        Initials = joinRequest.Initials,
-                        PlayerNumber = playerNumber,
-                        CurrentPlayers = _gameSession.CurrentPlayers,
-                        MaxPlayers = _gameSession.MaxPlayers,
-                        Timestamp = DateTime.UtcNow
-                    };
-                    _mqttClient?.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/players/joined", joinNotification);
-                    
-                    // Update UI
-                    _introScreen.UpdatePlayerJoin(joinRequest.Initials);
-                    
-                    // Check if we should start (max players reached)
-                    if (_gameSession.CurrentPlayers >= _gameSession.MaxPlayers)
-                    {
-                        StartMultiplayerGameSession();
-                    }
-                }
-            }
-            // Handle join response (client only)
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/join" && _gameSession.Role == GameSessionRole.Client)
-            {
-                var response = JsonSerializer.Deserialize<JoinResponseMessage>(payload);
-                if (response != null && response.Accepted && response.PlayerId == _gameSession.PlayerId)
-                {
-                    // Join accepted - wait for game start
-                }
-            }
+            // Ignore messages from self
+            if (message.PlayerId == _gameSession.PlayerId)
+                return;
+            
             // Handle player join notifications
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/players/joined")
+            if (message.PlayerJoin != null)
             {
-                var notification = JsonSerializer.Deserialize<PlayerJoinNotificationMessage>(payload);
-                if (notification != null)
+                _introScreen.UpdatePlayerJoin(message.PlayerJoin.Initials);
+                
+                // Update game session
+                if (!_gameSession.Players.Any(p => p.PlayerId == message.PlayerJoin.PlayerId))
                 {
-                    _introScreen.UpdatePlayerJoin(notification.Initials);
+                    _gameSession.Players.Add(new NetworkPlayerInfo
+                    {
+                        PlayerId = message.PlayerJoin.PlayerId,
+                        Initials = message.PlayerJoin.Initials,
+                        PlayerNumber = message.PlayerJoin.PlayerNumber
+                    });
+                }
+                
+                // Update player counts
+                _gameSession.CurrentPlayers = message.PlayerJoin.CurrentPlayers;
+                _gameSession.MaxPlayers = message.PlayerJoin.MaxPlayers;
+                
+                // If host, send game state to the newly joined player (whether game has started or not)
+                // This ensures the new player gets hives, snipes, and player positions
+                if (_gameSession.Role == GameSessionRole.Host)
+                {
+                    // Send game state snapshot to the new player so they can see hives and other players
+                    // Use a small delay to ensure the player's stream is fully connected
+                    Application.AddTimeout(TimeSpan.FromMilliseconds(300), () =>
+                    {
+                        // Always send game state snapshot when a player joins
+                        // This includes hives (if game has started) and all player positions
+                        PublishGameStateSnapshot();
+                        
+                        // Also send host's current position explicitly
+                        if (_gameSession.Status == GameSessionStatus.Playing)
+                        {
+                            PublishPlayerPosition();
+                        }
+                        return false; // One-time
+                    });
+                }
+                
+                // Check if we should start (max players reached)
+                if (_gameSession.Role == GameSessionRole.Host && 
+                    message.PlayerJoin.CurrentPlayers >= message.PlayerJoin.MaxPlayers)
+                {
+                    StartMultiplayerGameSession();
                 }
             }
             // Handle player count updates
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/players/count")
+            else if (message.PlayerCount != null)
             {
-                var update = JsonSerializer.Deserialize<PlayerCountUpdateMessage>(payload);
-                if (update != null)
+                _introScreen.UpdatePlayerCount(
+                    message.PlayerCount.CurrentPlayers, 
+                    message.PlayerCount.MaxPlayers, 
+                    message.PlayerCount.TimeRemaining
+                );
+                
+                // Update game session with player counts
+                if (_gameSession != null)
                 {
-                    _introScreen.UpdatePlayerCount(update.CurrentPlayers, update.MaxPlayers, update.TimeRemaining);
+                    _gameSession.CurrentPlayers = message.PlayerCount.CurrentPlayers;
+                    _gameSession.MaxPlayers = message.PlayerCount.MaxPlayers;
+                    
+                    // Update player list from the message
+                    if (message.PlayerCount.Players != null)
+                    {
+                        foreach (var playerInfo in message.PlayerCount.Players)
+                        {
+                            if (!_gameSession.Players.Any(p => p.PlayerId == playerInfo.PlayerId))
+                            {
+                                _gameSession.Players.Add(new NetworkPlayerInfo
+                                {
+                                    PlayerId = playerInfo.PlayerId,
+                                    Initials = playerInfo.Initials,
+                                    PlayerNumber = playerInfo.PlayerNumber
+                                });
+                            }
+                        }
+                    }
                 }
             }
             // Handle game start
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/start")
+            else if (message.GameStart != null)
             {
-                var startMessage = JsonSerializer.Deserialize<GameStartMessage>(payload);
-                if (startMessage != null)
+                _gameSession.Status = GameSessionStatus.Starting;
+                
+                // Initialize network players
+                foreach (var playerId in message.GameStart.PlayerIds)
                 {
-                    _gameSession.Status = GameSessionStatus.Starting;
-                    
-                    // Initialize network players from game session
-                    foreach (var playerId in startMessage.Players)
+                    var playerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == playerId);
+                    if (playerInfo != null)
                     {
-                        var playerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == playerId);
-                        if (playerInfo != null)
+                        var networkPlayer = new PlayerNetwork(
+                            playerInfo.PlayerId,
+                            playerInfo.Initials,
+                            playerInfo.PlayerNumber,
+                            isLocal: playerInfo.PlayerId == _gameSession.PlayerId
+                        );
+                        
+                        _networkPlayers[playerInfo.PlayerId] = networkPlayer;
+                        
+                        if (networkPlayer.IsLocal)
                         {
-                            var networkPlayer = new PlayerNetwork(
-                                playerInfo.PlayerId,
-                                playerInfo.Initials,
-                                playerInfo.PlayerNumber,
-                                isLocal: playerInfo.PlayerId == _gameSession.PlayerId
-                            );
-                            
-                            // Initial position will be set from game state or spawn message
-                            _networkPlayers[playerInfo.PlayerId] = networkPlayer;
-                            
-                            if (networkPlayer.IsLocal)
-                            {
-                                // Ensure local player initials match
-                                _player.Initials = playerInfo.Initials;
-                                // Local player position will be set from game state
-                            }
+                            _player.Initials = playerInfo.Initials;
                         }
                     }
-                    
-                    _introScreen.StartGame();
+                }
+                
+                _introScreen.StartGame();
+                
+                // For clients, publish initial position after game starts so host can see them
+                if (_gameSession.Role == GameSessionRole.Client)
+                {
+                    Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+                    {
+                        PublishPlayerPosition();
+                        return false; // One-time
+                    });
                 }
             }
-            // Handle game state updates (clients receive from host)
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/state")
+            // Handle game state snapshot (clients receive from host)
+            else if (message.State != null)
             {
-                HandleGameStateUpdate(payload);
+                HandleGameStateSnapshot(message.State);
             }
             // Handle snipe updates (clients receive from host)
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/snipes")
+            else if (message.Snipes != null)
             {
-                HandleSnipeUpdates(payload);
+                HandleSnipeUpdatesGrpc(message.Snipes);
             }
             // Handle hive updates (clients receive from host)
-            else if (topic == $"nsnipes/game/{_gameSession.GameId}/hives")
+            else if (message.Hives != null)
             {
-                HandleHiveUpdates(payload);
+                HandleHiveUpdatesGrpc(message.Hives);
             }
             // Handle player position updates
-            else if (topic.StartsWith($"nsnipes/game/{_gameSession.GameId}/player/") && topic.EndsWith("/position"))
+            else if (message.Position != null)
             {
-                var posUpdate = JsonSerializer.Deserialize<PlayerPositionUpdateMessage>(payload);
-                // IMPORTANT: posUpdate.X and posUpdate.Y are WORLD/MAP coordinates (not viewport)
-                // Update position for ALL players (including host), not just remote ones
-                if (posUpdate != null)
+                // IMPORTANT: message.Position.X and Y are WORLD/MAP coordinates (not viewport)
+                if (_networkPlayers.TryGetValue(message.PlayerId, out var networkPlayer))
                 {
-                    // Update remote player position (or host position if we're a client)
-                    if (_networkPlayers.TryGetValue(posUpdate.PlayerId, out var networkPlayer))
+                    networkPlayer.UpdatePosition(message.Position.X, message.Position.Y, (int)message.Position.Sequence);
+                }
+                else
+                {
+                    // New player - try to find their info from game session first
+                    var sessionPlayerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == message.PlayerId);
+                    var isLocalPlayer = message.PlayerId == _gameSession.PlayerId;
+                    
+                    // Create network player even if not in game session (position updates can arrive before game state)
+                    var newNetworkPlayer = new PlayerNetwork(
+                        message.PlayerId,
+                        sessionPlayerInfo?.Initials ?? "??",  // Use "??" if not in session yet
+                        sessionPlayerInfo?.PlayerNumber ?? 0,  // Use 0 if not in session yet
+                        isLocal: isLocalPlayer
+                    );
+                    newNetworkPlayer.PreviousX = message.Position.X;
+                    newNetworkPlayer.PreviousY = message.Position.Y;
+                    newNetworkPlayer.UpdatePosition(message.Position.X, message.Position.Y, (int)message.Position.Sequence);
+                    _networkPlayers[message.PlayerId] = newNetworkPlayer;
+                    
+                    // Also add to game session if not already there (for consistency)
+                    if (sessionPlayerInfo == null && _gameSession != null)
                     {
-                        // Store world coordinates - conversion to viewport happens in DrawRemotePlayers()
-                        networkPlayer.UpdatePosition(posUpdate.X, posUpdate.Y, posUpdate.Sequence);
+                        _gameSession.Players.Add(new NetworkPlayerInfo
+                        {
+                            PlayerId = message.PlayerId,
+                            Initials = "??",
+                            PlayerNumber = 0
+                        });
                     }
-                    else
+                    
+                    if (newNetworkPlayer.IsLocal)
                     {
-                        // New player - find their info from game session
-                        var sessionPlayerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == posUpdate.PlayerId);
+                        _player.X = message.Position.X;
+                        _player.Y = message.Position.Y;
                         if (sessionPlayerInfo != null)
                         {
-                            var isLocalPlayer = posUpdate.PlayerId == _gameSession.PlayerId;
-                            var newNetworkPlayer = new PlayerNetwork(
-                                posUpdate.PlayerId,
-                                sessionPlayerInfo.Initials,
-                                sessionPlayerInfo.PlayerNumber,
-                                isLocal: isLocalPlayer
-                            );
-                            // Set initial previous position to current position to avoid clearing artifacts on first draw
-                            newNetworkPlayer.PreviousX = posUpdate.X;
-                            newNetworkPlayer.PreviousY = posUpdate.Y;
-                            newNetworkPlayer.UpdatePosition(posUpdate.X, posUpdate.Y, posUpdate.Sequence);
-                            _networkPlayers[posUpdate.PlayerId] = newNetworkPlayer;
-                            
-                            // If this is actually the local player, update _player position and initials
-                            if (newNetworkPlayer.IsLocal)
-                            {
-                                _player.X = posUpdate.X;
-                                _player.Y = posUpdate.Y;
-                                _player.Initials = sessionPlayerInfo.Initials;
-                            }
-                        }
-                        else
-                        {
-                            // Player not in session yet - might be host, create with default info
-                            // This should be rare and will be updated from game state snapshot
-                            var newNetworkPlayer = new PlayerNetwork(
-                                posUpdate.PlayerId,
-                                "??", // Unknown initials - will be updated from game state
-                                0, // Unknown number
-                                isLocal: posUpdate.PlayerId == _gameSession.PlayerId  // Check if this is actually the local player
-                            );
-                            newNetworkPlayer.PreviousX = posUpdate.X;
-                            newNetworkPlayer.PreviousY = posUpdate.Y;
-                            newNetworkPlayer.UpdatePosition(posUpdate.X, posUpdate.Y, posUpdate.Sequence);
-                            _networkPlayers[posUpdate.PlayerId] = newNetworkPlayer;
-                            
-                            // If this is actually the local player, update _player position
-                            if (newNetworkPlayer.IsLocal)
-                            {
-                                _player.X = posUpdate.X;
-                                _player.Y = posUpdate.Y;
-                            }
+                            _player.Initials = sessionPlayerInfo.Initials;
                         }
                     }
                 }
             }
-            // Handle bullet fired/updates
-            else if (topic.StartsWith($"nsnipes/game/{_gameSession.GameId}/player/") && topic.EndsWith("/bullet"))
+            // Handle bullet updates
+            else if (message.Bullet != null)
             {
-                var bulletMsg = JsonSerializer.Deserialize<BulletUpdateMessage>(payload);
-                if (bulletMsg != null)
+                HandleBulletMessageGrpc(message.Bullet, message.PlayerId);
+            }
+            // Handle player respawn
+            else if (message.Respawn != null)
+            {
+                if (_networkPlayers.TryGetValue(message.PlayerId, out var networkPlayer))
                 {
-                    HandleBulletMessage(bulletMsg);
+                    networkPlayer.UpdatePosition(message.Respawn.X, message.Respawn.Y, 0);
                 }
+            }
+            // Handle game over
+            else if (message.GameOver != null)
+            {
+                // Game over is handled elsewhere, but we can process it here if needed
             }
         }
         catch (Exception)
@@ -3458,105 +3601,379 @@ public class Game : Window
         }
     }
     
-    private void HandleBulletMessage(BulletUpdateMessage msg)
+    private void HandleGameStateSnapshot(GameStateSnapshot snapshot)
     {
-        if (msg.Action == "fired")
+        // Client receives game state snapshot from host
+        try
         {
-            // Add remote bullet to our list
-            var bullet = new Bullet(msg.X, msg.Y, msg.VelocityX, msg.VelocityY, msg.BulletId, msg.PlayerId);
-            _bullets.Add(bullet);
-        }
-        else if (msg.Action == "updated")
-        {
-            // Update existing bullet
-            var bullet = _bullets.FirstOrDefault(b => b.BulletId == msg.BulletId);
-            if (bullet != null)
+            // Update game state
+            _gameState.Level = snapshot.Level;
+            
+            // Update hives from host
+            _hives.Clear();
+            // Calculate snipes per hive from level (needed for Hive constructor)
+            int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(snapshot.Level);
+            foreach (var hiveState in snapshot.Hives)
             {
-                bullet.X = msg.X;
-                bullet.Y = msg.Y;
-                bullet.VelocityX = msg.VelocityX;
-                bullet.VelocityY = msg.VelocityY;
+                var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive)
+                {
+                    Hits = hiveState.Hits,
+                    IsDestroyed = hiveState.IsDestroyed,
+                    SnipesRemaining = hiveState.SnipesRemaining,
+                    FlashIntervalMs = hiveState.FlashIntervalMs
+                };
+                _hives.Add(hive);
             }
+            _gameState.TotalHives = snapshot.Hives.Count;
+            _gameState.HivesUndestroyed = snapshot.Hives.Count(h => !h.IsDestroyed);
+            
+            // Update snipes from host
+            // IMPORTANT: snipeState.X and snipeState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
+            _snipes.Clear();
+            foreach (var snipeState in snapshot.Snipes)
+            {
+                if (snipeState.IsAlive)
+                {
+                    var snipe = new Snipe(snipeState.X, snipeState.Y, !string.IsNullOrEmpty(snipeState.Type) ? snipeState.Type[0] : 'A')  // World coordinates
+                    {
+                        DirectionX = snipeState.DirectionX,
+                        DirectionY = snipeState.DirectionY,
+                        IsAlive = snipeState.IsAlive
+                    };
+                    _snipes.Add(snipe);
+                }
+            }
+            _gameState.TotalSnipes = snapshot.Snipes.Count;
+            _gameState.SnipesUndestroyed = snapshot.Snipes.Count(s => s.IsAlive);
+            
+            // Update player states
+            // IMPORTANT: playerState.X and playerState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
+            foreach (var playerState in snapshot.Players)
+            {
+                if (_networkPlayers.TryGetValue(playerState.PlayerId, out var networkPlayer))
+                {
+                    // Store world coordinates - conversion to viewport happens when drawing
+                    // Update previous position to avoid artifacts
+                    networkPlayer.PreviousX = networkPlayer.X;
+                    networkPlayer.PreviousY = networkPlayer.Y;
+                    networkPlayer.X = playerState.X;  // World coordinate
+                    networkPlayer.Y = playerState.Y;  // World coordinate
+                    networkPlayer.Lives = playerState.Lives;
+                    networkPlayer.Score = playerState.Score;
+                    networkPlayer.IsAlive = playerState.IsAlive;
+                    // Update initials from game state (in case they were "??" before)
+                    if (!string.IsNullOrEmpty(playerState.Initials))
+                    {
+                        networkPlayer.Initials = playerState.Initials;
+                    }
+                    
+                    if (networkPlayer.IsLocal)
+                    {
+                        _player.X = playerState.X;  // World coordinate
+                        _player.Y = playerState.Y;  // World coordinate
+                        _player.Lives = playerState.Lives;
+                        _player.Score = playerState.Score;
+                        _player.IsAlive = playerState.IsAlive;
+                        // Update local player initials too
+                        if (!string.IsNullOrEmpty(playerState.Initials))
+                        {
+                            _player.Initials = playerState.Initials;
+                        }
+                        _cachedMapViewport = null; // Force map redraw
+                    }
+                }
+                else
+                {
+                    // New player not in our network players list - create them
+                    var playerInfo = _gameSession?.Players.FirstOrDefault(p => p.PlayerId == playerState.PlayerId);
+                    var isLocalPlayer = playerState.PlayerId == _gameSession?.PlayerId;
+                    
+                    // Create network player even if not in game session (shouldn't happen, but be safe)
+                    var newNetworkPlayer = new PlayerNetwork(
+                        playerState.PlayerId,
+                        !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : (playerInfo?.Initials ?? "??"),
+                        playerInfo?.PlayerNumber ?? 0,
+                        isLocal: isLocalPlayer
+                    );
+                    newNetworkPlayer.PreviousX = playerState.X;
+                    newNetworkPlayer.PreviousY = playerState.Y;
+                    newNetworkPlayer.X = playerState.X;
+                    newNetworkPlayer.Y = playerState.Y;
+                    newNetworkPlayer.Lives = playerState.Lives;
+                    newNetworkPlayer.Score = playerState.Score;
+                    newNetworkPlayer.IsAlive = playerState.IsAlive;
+                    _networkPlayers[playerState.PlayerId] = newNetworkPlayer;
+                    
+                    // Also add to game session if not already there
+                    if (playerInfo == null && _gameSession != null)
+                    {
+                        _gameSession.Players.Add(new NetworkPlayerInfo
+                        {
+                            PlayerId = playerState.PlayerId,
+                            Initials = !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : "??",
+                            PlayerNumber = 0
+                        });
+                    }
+                    
+                    if (newNetworkPlayer.IsLocal)
+                    {
+                        _player.X = playerState.X;
+                        _player.Y = playerState.Y;
+                        _player.Lives = playerState.Lives;
+                        _player.Score = playerState.Score;
+                        _player.IsAlive = playerState.IsAlive;
+                        if (!string.IsNullOrEmpty(playerState.Initials))
+                        {
+                            _player.Initials = playerState.Initials;
+                        }
+                        _cachedMapViewport = null;
+                    }
+                }
+            }
+            
+            // Force map redraw to show hives and players
+            _cachedMapViewport = null;
+            _mapDrawn = false;
         }
-        else if (msg.Action == "expired" || msg.Action == "hit")
+        catch (Exception)
         {
-            // Remove bullet
-            _bullets.RemoveAll(b => b.BulletId == msg.BulletId);
+            // Handle error silently
         }
     }
     
+    private void HandleSnipeUpdatesGrpc(SnipeUpdates updates)
+    {
+        // Convert gRPC snipe updates to internal format
+        foreach (var update in updates.Updates)
+        {
+            if (update.Action == "spawned")
+            {
+                // Create new snipe
+                var snipe = new Snipe(update.X, update.Y, !string.IsNullOrEmpty(update.Type) ? update.Type[0] : 'A', update.DirectionX, update.DirectionY);
+                snipe.SnipeId = update.SnipeId;
+                _snipes.Add(snipe);
+            }
+            else if (update.Action == "moved")
+            {
+                var snipe = _snipes.FirstOrDefault(s => s.SnipeId == update.SnipeId);
+                if (snipe != null)
+                {
+                    snipe.X = update.X;
+                    snipe.Y = update.Y;
+                    snipe.DirectionX = update.DirectionX;
+                    snipe.DirectionY = update.DirectionY;
+                }
+            }
+            else if (update.Action == "died")
+            {
+                _snipes.RemoveAll(s => s.SnipeId == update.SnipeId);
+            }
+        }
+    }
+    
+    private void HandleHiveUpdatesGrpc(HiveUpdates updates)
+    {
+        // Convert gRPC hive updates to internal format
+        foreach (var update in updates.Updates)
+        {
+            if (update.Action == "spawned")
+            {
+                // Hives are spawned at game start, so this might not be needed
+            }
+            else if (update.Action == "hit")
+            {
+                var hive = _hives.FirstOrDefault(h => $"hive_{h.X}_{h.Y}" == update.HiveId);
+                if (hive != null)
+                {
+                    hive.Hits = update.Hits;
+                    hive.FlashIntervalMs = update.FlashIntervalMs;
+                }
+            }
+            else if (update.Action == "destroyed")
+            {
+                _hives.RemoveAll(h => $"hive_{h.X}_{h.Y}" == update.HiveId);
+            }
+        }
+    }
+    
+    private void HandleBulletMessageGrpc(BulletUpdate bulletMsg, string playerId)
+    {
+        if (bulletMsg.Action == "fired")
+        {
+            // Add remote bullet to our list
+            var bullet = new Bullet(bulletMsg.X, bulletMsg.Y, bulletMsg.VelocityX, bulletMsg.VelocityY, bulletMsg.BulletId, playerId);
+            _bullets.Add(bullet);
+        }
+        else if (bulletMsg.Action == "updated")
+        {
+            // Update existing bullet
+            var bullet = _bullets.FirstOrDefault(b => b.BulletId == bulletMsg.BulletId);
+            if (bullet != null)
+            {
+                bullet.X = bulletMsg.X;
+                bullet.Y = bulletMsg.Y;
+                bullet.VelocityX = bulletMsg.VelocityX;
+                bullet.VelocityY = bulletMsg.VelocityY;
+            }
+        }
+        else if (bulletMsg.Action == "expired" || bulletMsg.Action == "hit")
+        {
+            // Find and clear the bullet before removing it
+            var bullet = _bullets.FirstOrDefault(b => b.BulletId == bulletMsg.BulletId);
+            if (bullet != null && Application.Driver != null)
+            {
+                // Get viewport information to clear the bullet
+                int currentWidth = Application.Driver.Cols;
+                int currentHeight = Application.Driver.Rows;
+                int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
+                int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
+                
+                int mapOffsetX = _player.X - (frameWidth / 2);
+                int mapOffsetY = _player.Y - (frameHeight / 2);
+                
+                // Get fresh map for clearing
+                var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+                
+                // Clear bullet at current position
+                int bulletWorldX = (int)Math.Round(bullet.X);
+                int bulletWorldY = (int)Math.Round(bullet.Y);
+                bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                
+                int viewportX = bulletWorldX - mapOffsetX;
+                int viewportY = bulletWorldY - mapOffsetY;
+                if (viewportX >= 0 && viewportX < frameWidth &&
+                    viewportY >= 0 && viewportY < frameHeight &&
+                    freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
+                    viewportX >= 0 && viewportX < freshMap[viewportY].Length)
+                {
+                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
+                    Application.Driver.AddRune(freshMap[viewportY][viewportX]);
+                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                }
+                
+                // Also clear bullet's previous position if different
+                int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                
+                if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                {
+                    int prevViewportX = prevBulletWorldX - mapOffsetX;
+                    int prevViewportY = prevBulletWorldY - mapOffsetY;
+                    if (prevViewportX >= 0 && prevViewportX < frameWidth &&
+                        prevViewportY >= 0 && prevViewportY < frameHeight &&
+                        freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
+                        prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
+                    {
+                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                        Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
+                        Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
+                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                    }
+                }
+                
+                // Invalidate cached map
+                _cachedMapViewport = null;
+            }
+            
+            // Remove bullet
+            _bullets.RemoveAll(b => b.BulletId == bulletMsg.BulletId);
+        }
+    }
+    
+    // Legacy methods removed - using gRPC HandleBulletMessageGrpc now
+    
     private void PublishPlayerPosition()
     {
-        if (_gameSession == null || _mqttClient == null || !_isMultiplayer)
+        if (_gameSession == null || _grpcClient == null || !_isMultiplayer)
             return;
         
         // Throttle position updates to avoid flooding, but allow more frequent updates
         // Reduce throttling to 20ms for smoother movement
+        // Note: The periodic timer (200ms) will ensure position is sent even if player isn't moving
         if ((DateTime.Now - _lastPositionPublish).TotalMilliseconds < 20)
             return;
         
         _positionSequence++;
-        // IMPORTANT: All coordinates in MQTT messages must be WORLD/MAP coordinates, not viewport coordinates
+        // IMPORTANT: All coordinates in gRPC messages must be WORLD/MAP coordinates, not viewport coordinates
         // _player.X and _player.Y are world coordinates (0 to MapWidth/MapHeight)
-        var posUpdate = new PlayerPositionUpdateMessage
+        var gameMessage = new GameMessage
         {
+            GameId = _gameSession.GameId,
             PlayerId = _gameSession.PlayerId,
-            X = _player.X,  // World coordinate (map space)
-            Y = _player.Y,  // World coordinate (map space)
-            Timestamp = DateTime.UtcNow,
-            Sequence = _positionSequence
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Position = new PlayerPositionUpdate
+            {
+                X = _player.X,  // World coordinate (map space)
+                Y = _player.Y,  // World coordinate (map space)
+                Sequence = _positionSequence
+            }
         };
         
-        // Use fire-and-forget for position updates (QoS 0) for lower latency
-        _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/player/{_gameSession.PlayerId}/position", posUpdate);
+        // Use fire-and-forget for position updates
+        _ = _grpcClient.SendGameMessageAsync(gameMessage);
         _lastPositionPublish = DateTime.Now;
     }
     
     private void PublishBulletUpdate(Bullet bullet, string action, string? hitType = null, string? hitTargetId = null)
     {
-        if (_gameSession == null || _mqttClient == null)
+        if (_gameSession == null || _grpcClient == null)
             return;
         
-        var bulletMsg = new BulletUpdateMessage
+        var gameMessage = new GameMessage
         {
-            BulletId = bullet.BulletId,
+            GameId = _gameSession.GameId,
             PlayerId = bullet.PlayerId,
-            X = bullet.X,
-            Y = bullet.Y,
-            VelocityX = bullet.VelocityX,
-            VelocityY = bullet.VelocityY,
-            Timestamp = DateTime.UtcNow,
-            Action = action,
-            HitType = hitType,
-            HitTargetId = hitTargetId
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Bullet = new BulletUpdate
+            {
+                BulletId = bullet.BulletId,
+                X = bullet.X,
+                Y = bullet.Y,
+                VelocityX = bullet.VelocityX,
+                VelocityY = bullet.VelocityY,
+                Action = action,
+                HitType = hitType ?? "",
+                HitTargetId = hitTargetId ?? ""
+            }
         };
         
-        _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/player/{_gameSession.PlayerId}/bullet", bulletMsg);
+        _ = _grpcClient.SendGameMessageAsync(gameMessage);
     }
     
     private void PublishPlayerCountUpdate()
     {
-        if (_gameSession == null || _mqttClient == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
             return;
         
         int elapsed = (int)(DateTime.UtcNow - _gameSession.CreatedAt).TotalSeconds;
         int timeRemaining = Math.Max(0, 60 - elapsed);
         
-        var update = new PlayerCountUpdateMessage
+        var gameMessage = new GameMessage
         {
-            CurrentPlayers = _gameSession.CurrentPlayers,
-            MaxPlayers = _gameSession.MaxPlayers,
-            Players = _gameSession.Players.Select(p => new PlayerInfo
+            GameId = _gameSession.GameId,
+            PlayerId = _gameSession.PlayerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            PlayerCount = new PlayerCountUpdate
+            {
+                CurrentPlayers = _gameSession.CurrentPlayers,
+                MaxPlayers = _gameSession.MaxPlayers,
+                TimeRemaining = timeRemaining
+            }
+        };
+        foreach (var p in _gameSession.Players)
+        {
+            gameMessage.PlayerCount.Players.Add(new PlayerInfo
             {
                 PlayerId = p.PlayerId,
                 Initials = p.Initials,
                 PlayerNumber = p.PlayerNumber
-            }).ToList(),
-            TimeRemaining = timeRemaining,
-            Timestamp = DateTime.UtcNow
-        };
-        
-        _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/players/count", update);
+            });
+        }
+        _ = _grpcClient.SendGameMessageAsync(gameMessage);
     }
     
     private async void StartMultiplayerGameSession()
@@ -3591,23 +4008,22 @@ public class Game : Window
             _networkPlayers[playerInfo.PlayerId] = networkPlayer;
         }
         
-        // Subscribe to all player position updates (wildcard)
-        await _mqttClient?.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/player/+/position")!;
-        await _mqttClient?.SubscribeAsync($"nsnipes/game/{_gameSession.GameId}/player/+/bullet")!;
-        
-        // Publish game start message
-        var startMessage = new GameStartMessage
+        // Publish game start message (gRPC doesn't use subscriptions - messages come through the stream)
+        var gameMessage = new GameMessage
         {
             GameId = _gameSession.GameId,
-            Level = _gameState.Level,
-            Players = _gameSession.Players.Select(p => p.PlayerId).ToList(),
-            StartTime = _gameSession.StartTime.Value
+            PlayerId = _gameSession.PlayerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            GameStart = new GameStartMessage
+            {
+                Level = _gameState.Level
+            }
         };
-        
-        await _mqttClient?.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/start", startMessage)!;
-        
-        // Remove from active games
-        await _mqttClient?.PublishAsync($"nsnipes/games/active", "", retain: true)!; // Clear retained message
+        gameMessage.GameStart.PlayerIds.AddRange(_gameSession.Players.Select(p => p.PlayerId));
+        if (_grpcClient != null)
+        {
+            await _grpcClient.SendGameMessageAsync(gameMessage);
+        }
         
         // Start the game
         _gameSession.Status = GameSessionStatus.Playing;
@@ -3632,8 +4048,8 @@ public class Game : Window
         // Publish game state snapshot (hives, initial positions) for clients
         if (_gameSession.Role == GameSessionRole.Host)
         {
-            // Small delay to ensure subscriptions are active, then publish game state
-            Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+            // Small delay to ensure all players' streams are active, then publish game state
+            Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
             {
                 PublishGameStateSnapshot();
                 PublishPlayerPosition(); // Also publish host's initial position
@@ -3694,274 +4110,90 @@ public class Game : Window
     
     private void PublishBulletFired(Bullet bullet)
     {
-        if (_gameSession == null || _mqttClient == null)
+        if (_gameSession == null || _grpcClient == null)
             return;
         
-        var bulletMsg = new BulletUpdateMessage
-        {
-            BulletId = bullet.BulletId,
-            PlayerId = bullet.PlayerId,
-            X = bullet.X,
-            Y = bullet.Y,
-            VelocityX = bullet.VelocityX,
-            VelocityY = bullet.VelocityY,
-            Timestamp = bullet.CreatedAt,
-            Action = "fired"
-        };
-        
-        _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/player/{_gameSession.PlayerId}/bullet", bulletMsg);
+        // Use the standard bullet update method
+        PublishBulletUpdate(bullet, "fired");
     }
     
-    private void HandleGameStateUpdate(string payload)
-    {
-        // Client receives game state snapshot from host
-        try
-        {
-            var state = JsonSerializer.Deserialize<GameStateSnapshotMessage>(payload);
-            if (state != null)
-            {
-                // Update game state
-                _gameState.Level = state.Level;
-                
-                // Update hives from host
-                _hives.Clear();
-                // Calculate snipes per hive from level (needed for Hive constructor)
-                int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(state.Level);
-                foreach (var hiveState in state.Hives)
-                {
-                    var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive)
-                    {
-                        Hits = hiveState.Hits,
-                        IsDestroyed = hiveState.IsDestroyed,
-                        SnipesRemaining = hiveState.SnipesRemaining,
-                        FlashIntervalMs = hiveState.FlashIntervalMs
-                    };
-                    _hives.Add(hive);
-                }
-                _gameState.TotalHives = state.Hives.Count;
-                _gameState.HivesUndestroyed = state.Hives.Count(h => !h.IsDestroyed);
-                
-                // Update snipes from host
-                // IMPORTANT: snipeState.X and snipeState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
-                _snipes.Clear();
-                foreach (var snipeState in state.Snipes)
-                {
-                    if (snipeState.IsAlive)
-                    {
-                        var snipe = new Snipe(snipeState.X, snipeState.Y, snipeState.Type)  // World coordinates
-                        {
-                            DirectionX = snipeState.DirectionX,
-                            DirectionY = snipeState.DirectionY,
-                            IsAlive = snipeState.IsAlive
-                        };
-                        _snipes.Add(snipe);
-                    }
-                }
-                _gameState.TotalSnipes = state.Snipes.Count;
-                _gameState.SnipesUndestroyed = state.Snipes.Count(s => s.IsAlive);
-                
-                // Update player states
-                // IMPORTANT: playerState.X and playerState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
-                foreach (var playerState in state.Players)
-                {
-                    if (_networkPlayers.TryGetValue(playerState.PlayerId, out var networkPlayer))
-                    {
-                        // Store world coordinates - conversion to viewport happens when drawing
-                        // Update previous position to avoid artifacts
-                        networkPlayer.PreviousX = networkPlayer.X;
-                        networkPlayer.PreviousY = networkPlayer.Y;
-                        networkPlayer.X = playerState.X;  // World coordinate
-                        networkPlayer.Y = playerState.Y;  // World coordinate
-                        networkPlayer.Lives = playerState.Lives;
-                        networkPlayer.Score = playerState.Score;
-                        networkPlayer.IsAlive = playerState.IsAlive;
-                        // Update initials from game state (in case they were "??" before)
-                        if (!string.IsNullOrEmpty(playerState.Initials))
-                        {
-                            networkPlayer.Initials = playerState.Initials;
-                        }
-                        
-                        if (networkPlayer.IsLocal)
-                        {
-                            _player.X = playerState.X;  // World coordinate
-                            _player.Y = playerState.Y;  // World coordinate
-                            _player.Lives = playerState.Lives;
-                            _player.Score = playerState.Score;
-                            _player.IsAlive = playerState.IsAlive;
-                            // Update local player initials too
-                            if (!string.IsNullOrEmpty(playerState.Initials))
-                            {
-                                _player.Initials = playerState.Initials;
-                            }
-                            _cachedMapViewport = null; // Force map redraw
-                        }
-                    }
-                    else
-                    {
-                        // New player not in our network players list - create them
-                        var playerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == playerState.PlayerId);
-                        if (playerInfo != null)
-                        {
-                            var newNetworkPlayer = new PlayerNetwork(
-                                playerState.PlayerId,
-                                !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : playerInfo.Initials, // Use state initials if available, otherwise session initials
-                                playerInfo.PlayerNumber,
-                                isLocal: playerState.PlayerId == _gameSession.PlayerId
-                            );
-                            newNetworkPlayer.PreviousX = playerState.X;
-                            newNetworkPlayer.PreviousY = playerState.Y;
-                            newNetworkPlayer.X = playerState.X;
-                            newNetworkPlayer.Y = playerState.Y;
-                            newNetworkPlayer.Lives = playerState.Lives;
-                            newNetworkPlayer.Score = playerState.Score;
-                            newNetworkPlayer.IsAlive = playerState.IsAlive;
-                            _networkPlayers[playerState.PlayerId] = newNetworkPlayer;
-                            
-                            if (newNetworkPlayer.IsLocal)
-                            {
-                                _player.X = playerState.X;
-                                _player.Y = playerState.Y;
-                                _player.Lives = playerState.Lives;
-                                _player.Score = playerState.Score;
-                                _player.IsAlive = playerState.IsAlive;
-                                // Update local player initials from state
-                                if (!string.IsNullOrEmpty(playerState.Initials))
-                                {
-                                    _player.Initials = playerState.Initials;
-                                }
-                                _cachedMapViewport = null;
-                            }
-                        }
-                    }
-                }
-                
-                // Force redraw
-                _mapDrawn = false;
-            }
-        }
-        catch
-        {
-            // Handle error silently
-        }
-    }
+    // Legacy methods removed - using gRPC HandleSnipeUpdatesGrpc and HandleHiveUpdatesGrpc now
     
-    private void HandleSnipeUpdates(string payload)
-    {
-        // Client receives snipe updates from host
-        try
-        {
-            var updates = JsonSerializer.Deserialize<SnipeUpdatesMessage>(payload);
-            if (updates != null)
-            {
-                foreach (var update in updates.Updates)
-                {
-                    if (update.Action == "spawned")
-                    {
-                        // Spawn new snipe
-                        var snipe = new Snipe(update.X, update.Y, update.Type ?? 'A')
-                        {
-                            DirectionX = update.DirectionX,
-                            DirectionY = update.DirectionY
-                        };
-                        _snipes.Add(snipe);
-                        // Note: SnipesUndestroyed doesn't change when spawning - the snipe just moves from "in hive" to "spawned"
-                        // It only decreases when a snipe is killed
-                    }
-                    else if (update.Action == "moved")
-                    {
-                        // Update existing snipe position (find by approximate position)
-                        var snipe = _snipes.FirstOrDefault(s => 
-                            Math.Abs(s.X - update.X) <= 1 && Math.Abs(s.Y - update.Y) <= 1 && s.IsAlive);
-                        if (snipe != null)
-                        {
-                            snipe.X = update.X;
-                            snipe.Y = update.Y;
-                            snipe.DirectionX = update.DirectionX;
-                            snipe.DirectionY = update.DirectionY;
-                        }
-                    }
-                    else if (update.Action == "died")
-                    {
-                        // Remove snipe
-                        var snipe = _snipes.FirstOrDefault(s => 
-                            Math.Abs(s.X - update.X) <= 1 && Math.Abs(s.Y - update.Y) <= 1 && s.IsAlive);
-                        if (snipe != null)
-                        {
-                            snipe.IsAlive = false;
-                            _snipes.Remove(snipe);
-                            _gameState.SnipesUndestroyed--;
-                        }
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Handle error silently
-        }
-    }
+    // Legacy method removed - using HandleSnipeUpdatesGrpc now
     
-    private void HandleHiveUpdates(string payload)
-    {
-        // Client receives hive updates from host
-        try
-        {
-            var updates = JsonSerializer.Deserialize<HiveUpdatesMessage>(payload);
-            if (updates != null)
-            {
-                foreach (var update in updates.Updates)
-                {
-                    // Find hive by position (hive ID is based on position)
-                    var hive = _hives.FirstOrDefault(h => 
-                        Math.Abs(h.X - int.Parse(update.HiveId.Split('_')[1])) <= 1 &&
-                        Math.Abs(h.Y - int.Parse(update.HiveId.Split('_')[2])) <= 1);
-                    
-                    if (hive != null)
-                    {
-                        if (update.Action == "hit")
-                        {
-                            hive.Hits = update.Hits;
-                            hive.FlashIntervalMs = update.FlashIntervalMs;
-                        }
-                        else if (update.Action == "destroyed")
-                        {
-                            hive.IsDestroyed = true;
-                            _gameState.HivesUndestroyed--;
-                        }
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Handle error silently
-        }
-    }
+    // Legacy method removed - using HandleHiveUpdatesGrpc now
     
     private void PublishGameStateSnapshot()
     {
-        if (_gameSession == null || _mqttClient == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
             return;
         
-        // IMPORTANT: All coordinates in MQTT messages must be WORLD/MAP coordinates, not viewport coordinates
+        // IMPORTANT: All coordinates in gRPC messages must be WORLD/MAP coordinates, not viewport coordinates
         // All X/Y values here are world coordinates (0 to MapWidth/MapHeight)
         // Each client will convert these to viewport coordinates based on their own viewport dimensions
-        var snapshot = new GameStateSnapshotMessage
+        var gameMessage = new GameMessage
         {
             GameId = _gameSession.GameId,
-            Level = _gameState.Level,
-            Status = "playing",
-            Players = _networkPlayers.Values.Select(np => new PlayerStateInfo
+            PlayerId = _gameSession.PlayerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            State = new GameStateSnapshot
             {
-                PlayerId = np.PlayerId,
-                Initials = np.Initials,
-                X = np.X,  // World coordinate (map space)
-                Y = np.Y,  // World coordinate (map space)
-                Lives = np.Lives,
-                Score = np.Score,
-                IsAlive = np.IsAlive
-            }).ToList(),
-            Hives = _hives.Select(h => new HiveStateInfo
+                Level = _gameState.Level,
+                Status = "playing",
+                Sequence = 0
+            }
+        };
+        // Add players - include all players from game session, not just network players
+        // This ensures newly joined players are included even if they're not in _networkPlayers yet
+        foreach (var sessionPlayer in _gameSession.Players)
+        {
+            // Try to get network player data if available
+            if (_networkPlayers.TryGetValue(sessionPlayer.PlayerId, out var np))
+            {
+                gameMessage.State.Players.Add(new PlayerStateInfo
+                {
+                    PlayerId = np.PlayerId,
+                    Initials = np.Initials,
+                    X = np.X,  // World coordinate (map space)
+                    Y = np.Y,  // World coordinate (map space)
+                    Lives = np.Lives,
+                    Score = np.Score,
+                    IsAlive = np.IsAlive
+                });
+            }
+            else if (sessionPlayer.PlayerId == _gameSession.PlayerId)
+            {
+                // Host player - use local player data (host might not be in _networkPlayers yet)
+                gameMessage.State.Players.Add(new PlayerStateInfo
+                {
+                    PlayerId = _gameSession.PlayerId,
+                    Initials = _player.Initials,
+                    X = _player.X,  // World coordinate (map space)
+                    Y = _player.Y,  // World coordinate (map space)
+                    Lives = _player.Lives,
+                    Score = _player.Score,
+                    IsAlive = _player.IsAlive
+                });
+            }
+            else
+            {
+                // New player not yet in network players - use default values
+                gameMessage.State.Players.Add(new PlayerStateInfo
+                {
+                    PlayerId = sessionPlayer.PlayerId,
+                    Initials = sessionPlayer.Initials,
+                    X = 0,  // Will be updated when they send position
+                    Y = 0,
+                    Lives = 5,
+                    Score = 0,
+                    IsAlive = true
+                });
+            }
+        }
+        // Add hives
+        foreach (var h in _hives)
+        {
+            gameMessage.State.Hives.Add(new HiveStateInfo
             {
                 HiveId = $"hive_{h.X}_{h.Y}",
                 X = h.X,  // World coordinate (map space)
@@ -3970,22 +4202,23 @@ public class Game : Window
                 IsDestroyed = h.IsDestroyed,
                 SnipesRemaining = h.SnipesRemaining,
                 FlashIntervalMs = h.FlashIntervalMs
-            }).ToList(),
-            Snipes = _snipes.Select(s => new SnipeStateInfo
+            });
+        }
+        // Add snipes
+        foreach (var s in _snipes)
+        {
+            gameMessage.State.Snipes.Add(new SnipeStateInfo
             {
-                SnipeId = $"snipe_{s.X}_{s.Y}",
+                SnipeId = s.SnipeId,
                 X = s.X,  // World coordinate (map space)
                 Y = s.Y,  // World coordinate (map space)
-                Type = s.Type,
+                Type = s.Type.ToString(),
                 DirectionX = s.DirectionX,
                 DirectionY = s.DirectionY,
                 IsAlive = s.IsAlive
-            }).ToList(),
-            Timestamp = DateTime.UtcNow,
-            Sequence = 0
-        };
-        
-        _ = _mqttClient.PublishJsonAsync($"nsnipes/game/{_gameSession.GameId}/state", snapshot);
+            });
+        }
+        _ = _grpcClient.SendGameMessageAsync(gameMessage);
     }
 
 }

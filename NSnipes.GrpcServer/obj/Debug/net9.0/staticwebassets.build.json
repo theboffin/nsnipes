@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "OA3k2h3FSRU300jcwJvQTxN2NKC5qjjo8sPs/SgAKSw=",
+  "Source": "NSnipes.GrpcServer",
+  "BasePath": "_content/NSnipes.GrpcServer",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}

@@ -16,9 +16,10 @@ public class Snipe
     public int DirectionY { get; set; } // -1, 0, or 1
     public bool IsAlive { get; set; } = true;
     public DateTime LastMoveTime { get; set; }
+    public string SnipeId { get; set; } = ""; // Unique identifier for network sync
     public const int MoveIntervalMs = 200; // Snipes move every 200ms
     
-    public Snipe(int x, int y, char type)
+    public Snipe(int x, int y, char type, int directionX = 0, int directionY = 0)
     {
         X = x;
         Y = y;
@@ -28,9 +29,9 @@ public class Snipe
         PreviousDirectionY = 0;
         Type = type; // 'A' or 'B'
         LastMoveTime = DateTime.Now;
-        // Initial direction will be set when snipe starts moving toward player
-        DirectionX = 0;
-        DirectionY = 0;
+        DirectionX = directionX;
+        DirectionY = directionY;
+        SnipeId = $"snipe_{x}_{y}_{DateTime.UtcNow.Ticks}";
     }
     
     public char GetDisplayChar()

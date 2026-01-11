@@ -1,0 +1,81 @@
+{
+  "format": 1,
+  "restore": {
+    "/Volumes/MacExternal_4TB/Dev/c-sharp/nsnipes/NSnipes.GrpcServer/NSnipes.GrpcServer.csproj": {}
+  },
+  "projects": {
+    "/Volumes/MacExternal_4TB/Dev/c-sharp/nsnipes/NSnipes.GrpcServer/NSnipes.GrpcServer.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/Volumes/MacExternal_4TB/Dev/c-sharp/nsnipes/NSnipes.GrpcServer/NSnipes.GrpcServer.csproj",
+        "projectName": "NSnipes.GrpcServer",
+        "projectPath": "/Volumes/MacExternal_4TB/Dev/c-sharp/nsnipes/NSnipes.GrpcServer/NSnipes.GrpcServer.csproj",
+        "packagesPath": "/Users/briandukes/.nuget/packages/",
+        "outputPath": "/Volumes/MacExternal_4TB/Dev/c-sharp/nsnipes/NSnipes.GrpcServer/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/Users/briandukes/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net9.0"
+        ],
+        "sources": {
+          "/usr/local/share/dotnet/library-packs": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net9.0": {
+            "targetAlias": "net9.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.100"
+      },
+      "frameworks": {
+        "net9.0": {
+          "targetAlias": "net9.0",
+          "dependencies": {
+            "Grpc.AspNetCore": {
+              "target": "Package",
+              "version": "[2.62.0, )"
+            },
+            "Grpc.AspNetCore.Web": {
+              "target": "Package",
+              "version": "[2.62.0, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.AspNetCore.App": {
+              "privateAssets": "none"
+            },
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/usr/local/share/dotnet/sdk/9.0.102/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

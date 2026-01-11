@@ -1,5 +1,10 @@
 using Terminal.Gui;
 using System.Linq;
+using System.Net.Http;
+using System.Threading.Tasks;
+using Grpc.Net.Client;
+using Grpc.Core;
+using NSnipes.GrpcServer;
 
 namespace NSnipes;
 
@@ -20,6 +25,7 @@ public class IntroScreen
     private bool _showMenu = false;
     private bool _clearingScreen = false;
     private bool _isStartingNewGame = false; // Track if clearing effect is for starting a new game vs respawn
+    private int _lastDrawnMenuIndex = -1; // Track last drawn menu index to detect changes
     
     private DateTime _bannerStartTime;
     private int _bannerScrollPosition = 0;
@@ -27,12 +33,17 @@ public class IntroScreen
     private DateTime _clearingStartTime;
     private string _clearingMessage = "";
     
+    // Intro player animation state
+    private int _introPlayerX = -5; // Start off-screen to the left
+    private int _introPlayerY = 0; // Will be set based on banner position
+    private int _introPlayerPrevX = -5; // Previous X position for clearing
+    
     // Game over screen
     private GameOverScreen _gameOverScreen;
     
     // Menu state
     private int _selectedMenuIndex = 0;
-    private readonly string[] _menuItems = { "Start a New Game", "Join an Existing Game", "Initials", "Exit" };
+    private readonly string[] _menuItems = { "Start a New Game", "Join an Existing Game", "Initials", "Configure Server", "Exit" };
     private bool _enteringInitials = false;
     private string _initialsInput = "";
     
@@ -53,6 +64,15 @@ public class IntroScreen
     private int _timeRemaining = 60;
     private List<string> _joinedPlayers = new List<string>(); // List of player initials who joined
     private DateTime _joinWaitStartTime = DateTime.Now;
+    
+    // Server configuration state
+    private bool _enteringServerConfig = false;
+    private string _serverAddressInput = "";
+    private string _serverPortInput = "";
+    private bool _editingServerAddress = true; // true = editing address, false = editing port
+    private bool? _serverStatus = null; // null = unknown, true = online, false = offline
+    private DateTime _lastServerCheck = DateTime.MinValue;
+    private const int ServerCheckIntervalSeconds = 5; // Check server status every 5 seconds
     
     // Dependencies
     private GameConfig _config;
@@ -152,6 +172,9 @@ public class IntroScreen
         _startingLevelInput = "1";
         _selectedStartingLevel = 1;
         _bannerStartTime = DateTime.Now;
+        _introPlayerX = -5; // Reset player position to off-screen left
+        _introPlayerPrevX = -5; // Reset previous position
+        _introPlayerY = 0; // Will be calculated during animation
         
         // Clear the screen before showing intro
         if (Application.Driver != null)
@@ -231,6 +254,12 @@ public class IntroScreen
             return;
         }
         
+        if (_enteringServerConfig)
+        {
+            DrawServerConfigInput(width, height);
+            return;
+        }
+        
         // Fill screen with blue background
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
@@ -239,20 +268,27 @@ public class IntroScreen
             Application.Driver.AddStr(new string(' ', width));
         }
         
-        if (_bannerScrolling)
+        // Check if we're in the intro animation phase (banner scrolling or player exiting)
+        double elapsedSeconds = (DateTime.Now - _bannerStartTime).TotalSeconds;
+        int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
+        int targetX = (width - bannerWidth) / 2; // Center position
+        int startX = -bannerWidth; // Start completely off screen to the left
+        
+        // Animation phase: banner scrolling (0-2s) and player exiting (2-4s)
+        if (elapsedSeconds < 4.0)
         {
-            // Animate banner scrolling in from left
-            double elapsedSeconds = (DateTime.Now - _bannerStartTime).TotalSeconds;
-            int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
-            int targetX = (width - bannerWidth) / 2; // Center position
-            int startX = -bannerWidth; // Start completely off screen to the left
-            
+            // Animate banner scrolling in from left (first 2 seconds)
+            int bannerX;
             if (elapsedSeconds >= 2.0)
             {
-                // Animation complete, center the banner
+                // Banner animation complete, center the banner
+                bannerX = targetX;
                 _bannerScrollPosition = targetX;
-                _bannerScrolling = false;
-                _showMenu = true;
+                if (_bannerScrolling)
+                {
+                    _bannerScrolling = false;
+                    // Don't show menu yet - wait for player to exit
+                }
             }
             else
             {
@@ -261,22 +297,61 @@ public class IntroScreen
                 // Simple ease-in-out: smooth start and end
                 progress = progress * progress * (3.0 - 2.0 * progress);
                 // Interpolate from startX (off-screen left) to targetX (centered)
-                _bannerScrollPosition = (int)(startX + (targetX - startX) * progress);
+                bannerX = (int)(startX + (targetX - startX) * progress);
+                _bannerScrollPosition = bannerX;
             }
             
+            // Calculate player position - player leads banner (to the right), then exits after banner reaches center
+            int bannerStartY = height / 4; // Banner Y position
+            _introPlayerY = bannerStartY + 1 + 3; // Position player at middle of banner (row 3 of 7)
+            
+            // Player animation: leads banner (stays to the right), then exits over 2 seconds after banner reaches center
+            bool shouldDrawPlayer = true;
+            if (elapsedSeconds < 2.0)
+            {
+                // During banner animation: player stays ahead (to the right) of banner
+                // Player position = banner right edge + some spacing
+                int bannerRightEdge = bannerX + bannerWidth;
+                _introPlayerX = bannerRightEdge + 10; // 10 characters ahead of banner
+            }
+            else if (elapsedSeconds < 4.0)
+            {
+                // After banner reaches center: player exits right over 2 seconds
+                double exitProgress = (elapsedSeconds - 2.0) / 2.0; // 0 to 1 over 2 seconds
+                int exitStartX = targetX + bannerWidth + 10; // Start where player was when banner reached center
+                _introPlayerX = exitStartX + (int)((width + 5 - exitStartX) * exitProgress);
+            }
+            else
+            {
+                // Player animation complete, player should be off-screen right
+                _introPlayerX = width + 5;
+                shouldDrawPlayer = false; // Don't draw player when off-screen
+                // Now show the menu
+                _showMenu = true;
+            }
+            
+            // Draw banner first (so player appears on top)
             DrawBanner(_bannerScrollPosition, height);
+            
+            // Draw player only if it should be visible
+            if (shouldDrawPlayer)
+            {
+                DrawIntroPlayer(width, height);
+                // Update previous position for next frame
+                _introPlayerPrevX = _introPlayerX;
+            }
         }
         else
         {
+            // Animation complete (after 4 seconds) - show menu
             // Banner is centered, draw it and show menu
-            int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
             int bannerX = (width - bannerWidth) / 2;
             DrawBanner(bannerX, height);
             
-            if (_showMenu)
-            {
-                DrawMenu(width, height);
-            }
+            // Ensure menu is shown after animation completes
+            _showMenu = true;
+            DrawMenu(width, height);
+            _lastDrawnMenuIndex = _selectedMenuIndex; // Track what was drawn
         }
     }
     
@@ -327,6 +402,12 @@ public class IntroScreen
         if (_enteringGameId)
         {
             HandleGameIdInput(e);
+            return;
+        }
+        
+        if (_enteringServerConfig)
+        {
+            HandleServerConfigInput(e);
             return;
         }
         
@@ -408,7 +489,13 @@ public class IntroScreen
                 _initialsInput = "";
                 break;
                 
-            case 3: // Exit
+            case 3: // Configure Server
+                _enteringServerConfig = true;
+                _serverAddressInput = _config.ServerAddress;
+                _serverPortInput = _config.ServerPort.ToString();
+                break;
+                
+            case 4: // Exit
                 OnExit?.Invoke();
                 break;
         }
@@ -630,17 +717,25 @@ public class IntroScreen
     
     public void ShowWaitingForPlayers(string gameId, int maxPlayers, bool isHost)
     {
+        bool wasAlreadyWaiting = _waitingForPlayers;
         _waitingForPlayers = true;
         _showMenu = false;
         _currentGameId = gameId;
         _maxPlayers = maxPlayers;
         _currentPlayerCount = isHost ? 1 : 0; // Host counts as 1
-        _timeRemaining = 60;
-        _joinWaitStartTime = DateTime.Now;
-        _joinedPlayers.Clear();
-        if (isHost)
+        
+        Console.WriteLine($"[DEBUG] ShowWaitingForPlayers: gameId='{gameId}', _currentGameId='{_currentGameId}', wasAlreadyWaiting={wasAlreadyWaiting}");
+        
+        // Only reset timer if this is the first time showing the waiting screen
+        if (!wasAlreadyWaiting)
         {
-            _joinedPlayers.Add(_config.Initials); // Host is first player
+            _timeRemaining = 60;
+            _joinWaitStartTime = DateTime.Now;
+            _joinedPlayers.Clear();
+            if (isHost)
+            {
+                _joinedPlayers.Add(_config.Initials); // Host is first player
+            }
         }
     }
     
@@ -716,7 +811,7 @@ public class IntroScreen
         
         // Calculate menu position (centered below banner, with clear separation)
         int bannerEndY = height / 4 + 9; // Banner ends at 1/4 + 9 rows
-        int menuBoxHeight = _menuItems.Length + 3; // Items + title + borders + gap
+        int menuBoxHeight = _menuItems.Length + 4; // Items + 2 gaps + title border + bottom border
         int menuStartY = bannerEndY + 5; // 5 rows gap after banner
         
         // Calculate box dimensions
@@ -749,8 +844,8 @@ public class IntroScreen
         Application.Driver.Move(boxX + boxWidth - 1, boxY);
         Application.Driver.AddRune('┐');
         
-        // Calculate actual menu items (with gap between Initials and Exit)
-        int menuItemCount = _menuItems.Length + 1; // +1 for gap
+        // Calculate actual menu items (with gaps after Initials and Configure Server)
+        int menuItemCount = _menuItems.Length + 2; // +2 for gaps after Initials and Configure Server
         
         // Draw menu items
         int itemIndex = 0;
@@ -870,8 +965,8 @@ public class IntroScreen
             
             itemIndex++;
             
-            // Add gap after Initials option (index 2)
-            if (i == 2)
+            // Add gap after Initials option (index 2) and Configure Server (index 3)
+            if (i == 2 || i == 3)
             {
                 itemIndex++; // Skip a row for gap
             }
@@ -900,6 +995,173 @@ public class IntroScreen
         }
         Application.Driver.Move(boxX + boxWidth - 1, bottomY);
         Application.Driver.AddRune('┘');
+        
+        // Draw server status at the bottom of the screen
+        DrawServerStatus(width, height);
+    }
+    
+    private void DrawServerStatus(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Check server status periodically
+        if ((DateTime.Now - _lastServerCheck).TotalSeconds >= ServerCheckIntervalSeconds)
+        {
+            CheckServerStatus();
+            _lastServerCheck = DateTime.Now;
+        }
+        
+        string serverUrl = _config.GetServerUrl();
+        string statusText = $"Server: {serverUrl}";
+        
+        // Determine color based on status
+        Color statusColor;
+        if (_serverStatus == true)
+        {
+            statusColor = Color.Green;
+            statusText += " [ONLINE]";
+        }
+        else if (_serverStatus == false)
+        {
+            statusColor = Color.Red;
+            statusText += " [OFFLINE]";
+        }
+        else
+        {
+            statusColor = Color.Gray;
+            statusText += " [CHECKING...]";
+        }
+        
+        // Draw at bottom of screen (one row up from absolute bottom)
+        int statusY = height - 2;
+        int statusX = (width - statusText.Length) / 2;
+        
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(statusColor, Color.Blue));
+        Application.Driver.Move(statusX, statusY);
+        Application.Driver.AddStr(statusText);
+    }
+    
+    private void CheckServerStatus()
+    {
+        // Run async check in background
+        Task.Run(async () =>
+        {
+            try
+            {
+                string serverUrl = _config.GetServerUrl();
+                
+                // Since server uses HTTP/2 only (no HTTP/1.1 health check endpoint),
+                // we need to test gRPC connectivity instead
+                // Enable HTTP/2 unencrypted support for the check
+                AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+                
+                using (var channel = Grpc.Net.Client.GrpcChannel.ForAddress(serverUrl))
+                {
+                    // Try to connect by creating a client (lightweight test)
+                    // Don't actually make a call, just test if channel can be created
+                    var testClient = new NSnipes.GrpcServer.GameService.GameServiceClient(channel);
+                    
+                    // Try a simple call with a short timeout to test connectivity
+                    // Use a non-existent game ID to avoid side effects, but test if server responds
+                    try
+                    {
+                        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                        var request = new NSnipes.GrpcServer.JoinRequest
+                        {
+                            GameId = "TEST_CONNECTION",
+                            PlayerId = "TEST",
+                            Initials = "TEST"
+                        };
+                        await testClient.JoinGameAsync(request, cancellationToken: cts.Token);
+                        // If we get here, server is responding (even if game doesn't exist)
+                        _serverStatus = true;
+                    }
+                    catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.NotFound || 
+                                                             ex.StatusCode == Grpc.Core.StatusCode.InvalidArgument)
+                    {
+                        // Server responded (game not found is expected), so server is online
+                        _serverStatus = true;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Timeout - server might be offline or slow
+                        _serverStatus = false;
+                    }
+                    catch
+                    {
+                        // Other errors - assume server is offline
+                        _serverStatus = false;
+                    }
+                }
+            }
+            catch
+            {
+                _serverStatus = false;
+            }
+        });
+    }
+    
+    private void DrawIntroPlayer(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Clear previous position if it was on screen and different from current
+        if (_introPlayerPrevX != _introPlayerX && _introPlayerPrevX >= 0 && _introPlayerPrevX < width)
+        {
+            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+            // Clear the 2x3 player area
+            for (int row = 0; row < 3; row++)
+            {
+                int clearY = _introPlayerY + row;
+                if (clearY >= 0 && clearY < height)
+                {
+                    for (int col = 0; col < 2; col++)
+                    {
+                        int clearX = _introPlayerPrevX + col;
+                        if (clearX >= 0 && clearX < width)
+                        {
+                            Application.Driver.Move(clearX, clearY);
+                            Application.Driver.AddRune(' ');
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Only draw if player is on screen
+        if (_introPlayerX < -2 || _introPlayerX > width)
+            return;
+        
+        // Get current time for animation
+        DateTime now = DateTime.Now;
+        var eyes = now.Millisecond < 500 ? "ÔÔ" : "OO";
+        var mouth = now.Millisecond < 500 ? "◄►" : "◂▸";
+        
+        // Draw player at intro position
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        
+        // Draw eyes
+        if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY >= 0 && _introPlayerY < height)
+        {
+            Application.Driver.Move(_introPlayerX, _introPlayerY);
+            Application.Driver.AddStr(eyes);
+        }
+        
+        // Draw mouth
+        if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY + 1 >= 0 && _introPlayerY + 1 < height)
+        {
+            Application.Driver.Move(_introPlayerX, _introPlayerY + 1);
+            Application.Driver.AddStr(mouth);
+        }
+        
+        // Draw initials
+        if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY + 2 >= 0 && _introPlayerY + 2 < height)
+        {
+            Application.Driver.Move(_introPlayerX, _introPlayerY + 2);
+            Application.Driver.AddStr(_config.Initials);
+        }
     }
     
     private void DrawBanner(int startX, int screenHeight)
@@ -1244,8 +1506,16 @@ public class IntroScreen
         int elapsed = (int)(DateTime.Now - _joinWaitStartTime).TotalSeconds;
         _timeRemaining = Math.Max(0, 60 - elapsed);
         
-        // Draw game ID
-        string gameIdText = $"Game ID: {_currentGameId}";
+        // Draw game ID (show "Connecting..." only if game ID is null/empty, otherwise show actual game ID)
+        string displayGameId = string.IsNullOrEmpty(_currentGameId) ? "Connecting..." : _currentGameId;
+        string gameIdText = $"Game ID: {displayGameId}";
+        
+        // Debug output (only log occasionally to avoid spam)
+        if (DateTime.Now.Millisecond % 1000 < 50) // Log roughly once per second
+        {
+            Console.WriteLine($"[DEBUG] DrawWaitingForPlayers: _currentGameId='{_currentGameId}', displayGameId='{displayGameId}'");
+        }
+        
         int gameIdX = (width - gameIdText.Length) / 2;
         int gameIdY = height / 4;
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Blue));
@@ -1299,6 +1569,168 @@ public class IntroScreen
         string instructions = "Press ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = height - 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
+        Application.Driver.Move(instX, instY);
+        Application.Driver.AddStr(instructions);
+    }
+    
+    private void HandleServerConfigInput(dynamic e)
+    {
+        // Handle backspace
+        if (e.KeyCode == KeyCode.Backspace)
+        {
+            if (_editingServerAddress && _serverAddressInput.Length > 0)
+            {
+                _serverAddressInput = _serverAddressInput.Substring(0, _serverAddressInput.Length - 1);
+            }
+            else if (!_editingServerAddress && _serverPortInput.Length > 0)
+            {
+                _serverPortInput = _serverPortInput.Substring(0, _serverPortInput.Length - 1);
+            }
+            return;
+        }
+        
+        // Handle Tab to switch fields
+        if (e.KeyCode == KeyCode.Tab)
+        {
+            _editingServerAddress = !_editingServerAddress;
+            return;
+        }
+        
+        // Handle Escape to cancel
+        if (e.KeyCode == KeyCode.Esc)
+        {
+            _enteringServerConfig = false;
+            _serverAddressInput = "";
+            _serverPortInput = "";
+            _editingServerAddress = true;
+            return;
+        }
+        
+        // Handle Enter to confirm
+        if (e.KeyCode == KeyCode.Enter)
+        {
+            if (_editingServerAddress)
+            {
+                // Switch to port field
+                _editingServerAddress = false;
+                return;
+            }
+            else
+            {
+                // Save configuration
+                if (!string.IsNullOrWhiteSpace(_serverAddressInput) && 
+                    int.TryParse(_serverPortInput, out int port) && port > 0 && port <= 65535)
+                {
+                    _config.ServerAddress = _serverAddressInput.Trim();
+                    _config.ServerPort = port;
+                    _config.Save();
+                    _serverStatus = null; // Reset status to force recheck
+                    _enteringServerConfig = false;
+                    _serverAddressInput = "";
+                    _serverPortInput = "";
+                    _editingServerAddress = true;
+                }
+                return;
+            }
+        }
+        
+        // Get character from key
+        char? ch = GetCharFromKey(e);
+        if (ch == null)
+            return;
+        
+        if (_editingServerAddress)
+        {
+            // Allow alphanumeric, dots, hyphens for address
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || 
+                (ch >= '0' && ch <= '9') || ch == '.' || ch == '-')
+            {
+                if (_serverAddressInput.Length < 50) // Reasonable limit
+                {
+                    _serverAddressInput += char.ToLower(ch.Value);
+                }
+            }
+        }
+        else
+        {
+            // Only digits for port
+            if (ch >= '0' && ch <= '9')
+            {
+                string newPort = _serverPortInput + ch.Value;
+                if (int.TryParse(newPort, out int port) && port >= 0 && port <= 65535)
+                {
+                    _serverPortInput = newPort;
+                }
+            }
+        }
+    }
+    
+    private void DrawServerConfigInput(int width, int height)
+    {
+        if (Application.Driver == null)
+            return;
+        
+        // Fill screen with blue background
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        for (int y = 0; y < height; y++)
+        {
+            Application.Driver.Move(0, y);
+            Application.Driver.AddStr(new string(' ', width));
+        }
+        
+        // Draw title
+        string title = "Configure Server";
+        int titleX = (width - title.Length) / 2;
+        int titleY = height / 2 - 4;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Blue));
+        Application.Driver.Move(titleX, titleY);
+        Application.Driver.AddStr(title);
+        
+        // Draw address prompt
+        string addressPrompt = "Server Address:";
+        int addressPromptX = (width - 50) / 2;
+        int addressPromptY = titleY + 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(addressPromptX, addressPromptY);
+        Application.Driver.AddStr(addressPrompt);
+        
+        // Draw address input
+        string addressDisplay = _serverAddressInput.Length > 0 ? _serverAddressInput : _config.ServerAddress;
+        int addressInputX = addressPromptX;
+        int addressInputY = addressPromptY + 1;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
+        Application.Driver.Move(addressInputX, addressInputY);
+        Application.Driver.AddStr(addressDisplay);
+        if (_editingServerAddress && _serverAddressInput.Length == 0)
+        {
+            Application.Driver.AddRune('▊');
+        }
+        
+        // Draw port prompt
+        string portPrompt = "Server Port:";
+        int portPromptX = addressPromptX;
+        int portPromptY = addressInputY + 2;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        Application.Driver.Move(portPromptX, portPromptY);
+        Application.Driver.AddStr(portPrompt);
+        
+        // Draw port input
+        string portDisplay = _serverPortInput.Length > 0 ? _serverPortInput : _config.ServerPort.ToString();
+        int portInputX = portPromptX;
+        int portInputY = portPromptY + 1;
+        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(!_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
+        Application.Driver.Move(portInputX, portInputY);
+        Application.Driver.AddStr(portDisplay);
+        if (!_editingServerAddress && _serverPortInput.Length == 0)
+        {
+            Application.Driver.AddRune('▊');
+        }
+        
+        // Draw instructions
+        string instructions = "Press TAB to switch fields, ENTER to confirm, ESC to cancel";
+        int instX = (width - instructions.Length) / 2;
+        int instY = portInputY + 2;
         Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
         Application.Driver.Move(instX, instY);
         Application.Driver.AddStr(instructions);

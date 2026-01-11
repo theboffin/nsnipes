@@ -290,9 +290,12 @@ public class GameOverScreen
         string scoresHeader = "-< SCORES >-";
         int headerX = (width - scoresHeader.Length) / 2;
         int headerY = scoresStartY;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(headerX, headerY);
-        Application.Driver.AddStr(scoresHeader);
+        if (Application.Driver != null)
+        {
+            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+            Application.Driver.Move(headerX, headerY);
+            Application.Driver.AddStr(scoresHeader);
+        }
         
         // Draw player scores below header
         int scoresListStartY = scoresStartY + 2; // 2 lines below header

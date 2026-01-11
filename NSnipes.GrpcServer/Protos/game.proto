@@ -1,0 +1,202 @@
+syntax = "proto3";
+
+package nsnipes;
+
+option csharp_namespace = "NSnipes.GrpcServer";
+
+// Game service for multiplayer communication
+service GameService {
+  // Bidirectional streaming for all game messages
+  rpc GameStream(stream GameMessage) returns (stream GameMessage);
+  
+  // Join game request (unary call)
+  rpc JoinGame(JoinRequest) returns (JoinResponse);
+  
+  // Create new game (unary call)
+  rpc CreateGame(CreateGameRequest) returns (CreateGameResponse);
+}
+
+// Main message wrapper - all game messages use this
+message GameMessage {
+  string gameId = 1;
+  string playerId = 2;
+  int64 timestamp = 3; // Unix timestamp in milliseconds
+  
+  oneof message {
+    // Player messages
+    PlayerPositionUpdate position = 10;
+    PlayerRespawnMessage respawn = 11;
+    
+    // Bullet messages
+    BulletUpdate bullet = 12;
+    
+    // Game state messages (host only)
+    GameStateSnapshot state = 13;
+    SnipeUpdates snipes = 14;
+    HiveUpdates hives = 15;
+    
+    // Game control messages
+    GameStartMessage gameStart = 16;
+    GameOverMessage gameOver = 17;
+    PlayerJoinNotification playerJoin = 18;
+    PlayerCountUpdate playerCount = 19;
+  }
+}
+
+// Game creation and joining
+message CreateGameRequest {
+  string hostPlayerId = 1;
+  string hostInitials = 2;
+  int32 maxPlayers = 3;
+  int32 startingLevel = 4;
+}
+
+message CreateGameResponse {
+  string gameId = 1;
+  bool success = 2;
+  string errorMessage = 3;
+}
+
+message JoinRequest {
+  string gameId = 1;
+  string playerId = 2;
+  string initials = 3;
+}
+
+message JoinResponse {
+  bool accepted = 1;
+  string playerId = 2;
+  int32 playerNumber = 3;
+  string errorMessage = 4;
+  GameStateSnapshot initialState = 5; // Full game state on join
+}
+
+// Player position update
+message PlayerPositionUpdate {
+  int32 x = 1; // World coordinate
+  int32 y = 2; // World coordinate
+  int64 sequence = 3;
+}
+
+// Player respawn
+message PlayerRespawnMessage {
+  int32 x = 1; // World coordinate
+  int32 y = 2; // World coordinate
+}
+
+// Bullet update
+message BulletUpdate {
+  string bulletId = 1;
+  double x = 2;
+  double y = 3;
+  double velocityX = 4;
+  double velocityY = 5;
+  string action = 6; // "fired", "updated", "expired", "hit"
+  string hitType = 7; // "snipe", "hive", "player", "wall" (only for "hit")
+  string hitTargetId = 8; // ID of hit target (only for "hit")
+}
+
+// Game state snapshot (host publishes)
+message GameStateSnapshot {
+  int32 level = 1;
+  string status = 2; // "waiting", "playing", "ended"
+  repeated PlayerStateInfo players = 3;
+  repeated HiveStateInfo hives = 4;
+  repeated SnipeStateInfo snipes = 5;
+  int64 sequence = 6;
+}
+
+message PlayerStateInfo {
+  string playerId = 1;
+  string initials = 2;
+  int32 x = 3;
+  int32 y = 4;
+  int32 lives = 5;
+  int32 score = 6;
+  bool isAlive = 7;
+}
+
+message HiveStateInfo {
+  string hiveId = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 hits = 4;
+  bool isDestroyed = 5;
+  int32 snipesRemaining = 6;
+  int32 flashIntervalMs = 7;
+}
+
+message SnipeStateInfo {
+  string snipeId = 1;
+  int32 x = 2;
+  int32 y = 3;
+  string type = 4; // "A" or "B"
+  int32 directionX = 5;
+  int32 directionY = 6;
+  bool isAlive = 7;
+}
+
+// Snipe updates (host publishes)
+message SnipeUpdates {
+  repeated SnipeUpdateInfo updates = 1;
+}
+
+message SnipeUpdateInfo {
+  string snipeId = 1;
+  string action = 2; // "spawned", "moved", "died"
+  int32 x = 3;
+  int32 y = 4;
+  int32 directionX = 5;
+  int32 directionY = 6;
+  string type = 7; // Only for "spawned"
+}
+
+// Hive updates (host publishes)
+message HiveUpdates {
+  repeated HiveUpdateInfo updates = 1;
+}
+
+message HiveUpdateInfo {
+  string hiveId = 1;
+  string action = 2; // "spawned", "hit", "destroyed"
+  int32 hits = 3;
+  int32 flashIntervalMs = 4;
+}
+
+// Game control messages
+message GameStartMessage {
+  int32 level = 1;
+  repeated string playerIds = 2;
+}
+
+message GameOverMessage {
+  repeated PlayerScoreInfo finalScores = 1;
+}
+
+message PlayerScoreInfo {
+  string playerId = 1;
+  string initials = 2;
+  int32 score = 3;
+  int32 rank = 4;
+}
+
+message PlayerJoinNotification {
+  string playerId = 1;
+  string initials = 2;
+  int32 playerNumber = 3;
+  int32 currentPlayers = 4;
+  int32 maxPlayers = 5;
+}
+
+message PlayerCountUpdate {
+  int32 currentPlayers = 1;
+  int32 maxPlayers = 2;
+  repeated PlayerInfo players = 3;
+  int32 timeRemaining = 4; // seconds
+}
+
+message PlayerInfo {
+  string playerId = 1;
+  string initials = 2;
+  int32 playerNumber = 3;
+}

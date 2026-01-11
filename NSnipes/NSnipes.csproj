@@ -5,11 +5,25 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Terminal.Gui" Version="2.0.0-prealpha.1895" />
-    <PackageReference Include="MQTTnet" Version="4.3.3.952" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.25.3" />
+    <PackageReference Include="Grpc.Tools" Version="2.62.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NSnipes.GrpcServer\NSnipes.GrpcServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\NSnipes.GrpcServer\Protos\game.proto" GrpcServices="Client" Link="Protos\game.proto" />
   </ItemGroup>
 
 </Project>

@@ -14,9 +14,35 @@ This is an exercise in programming and networking as much as it is a journey int
 
 ## Building and Running
 
+### Starting the gRPC Server
+
+The multiplayer game requires a gRPC server to be running. Start it first:
+
+**Linux/macOS (Bash):**
+```bash
+# Run without rebuilding
+./run-server.sh
+
+# Build and run
+./run-server.sh -build
+```
+
+**Windows (PowerShell):**
+```powershell
+# Run without rebuilding
+.\run-server.ps1
+
+# Build and run
+.\run-server.ps1 -build
+```
+
+The server will start on `http://localhost:5000` by default. You can configure the server address in the client code if needed.
+
+### Starting the Game Client
+
 Use the provided scripts to run the game:
 
-### Linux/macOS (Bash)
+**Linux/macOS (Bash):**
 
 **Run without rebuilding** (uses already-built executable):
 ```bash
@@ -28,7 +54,7 @@ Use the provided scripts to run the game:
 ./run.sh -build
 ```
 
-### Windows (PowerShell)
+**Windows (PowerShell):**
 
 **Run without rebuilding** (uses already-built executable):
 ```powershell
@@ -41,6 +67,61 @@ Use the provided scripts to run the game:
 ```
 
 **Note**: The default behavior (without `-build` flag) runs the game without rebuilding, which is useful for multiplayer testing where you want to build in one terminal and run in multiple terminals without rebuilding each time.
+
+## Starting a Game
+
+### Single Player Game
+
+1. Start the game client (see "Starting the Game Client" above)
+2. From the intro screen menu, select **"Start a New Game"** (or press **S**)
+3. You'll be prompted to **"Select Starting Level"** (default: 1, limit: 50)
+   - Type a number (1-50) or press ENTER to use the default (1)
+4. The game will start immediately with a clearing effect animation showing the level information
+5. You can play solo - no network connection required for single player mode
+
+### Multiplayer Game
+
+**Prerequisites:**
+- The gRPC server must be running (see "Starting the gRPC Server" above)
+- All players must be able to connect to the same server (default: `localhost:5000`)
+
+**To Host a Multiplayer Game:**
+
+1. Start the gRPC server (if not already running)
+2. Start the game client
+3. From the intro screen menu, select **"Start Multiplayer"** (or press **M**)
+4. You'll be prompted to **"Select Starting Level"** (default: 1, limit: 50)
+   - Type a number (1-50) or press ENTER to use the default (1)
+5. You'll be prompted for **"How many players?"** (1-5)
+   - Type a number (1-5) or press ENTER to use the default (2)
+   - **Note**: If you select 1 player, the game will start immediately in single-player mode (no network)
+6. If you selected 2-5 players, you'll see a waiting screen with:
+   - Your **6-character Game ID** (e.g., "ABC123")
+   - Current player count (e.g., "1 of 3 players joined")
+   - Join notifications as players join
+7. Share the Game ID with other players
+8. The game will automatically start when:
+   - The maximum number of players join, OR
+   - 60 seconds elapse (whichever comes first)
+
+**To Join a Multiplayer Game:**
+
+1. Ensure the gRPC server is running (same server as the host)
+2. Start the game client
+3. From the intro screen menu, select **"Join Multiplayer"** (or press **J**)
+4. Enter the **6-character Game ID** provided by the host
+5. You'll see a waiting screen showing:
+   - Current player count
+   - Join notifications as other players join
+6. Wait for the game to start (when max players join or 60 seconds elapse)
+7. The game will begin with all players synchronized
+
+**Multiplayer Tips:**
+- All players should use the same starting level for consistency
+- The host controls game state (hives, snipes) - clients receive updates
+- All players can move and shoot independently
+- Player positions, bullets, and game state are synchronized in real-time
+- If the host disconnects, the game may become unstable (host migration not yet implemented)
 
 ![Intro Screen](./nsnipes-intro.png)
 The 'Intro Screen' will change quite a bit as multi-player gaming is added
@@ -65,10 +146,18 @@ So what's left to do:
   - ✅ Start Multiplayer Game (implemented - prompts for player count, generates 6-character game ID, 60-second join window)
   - ✅ Join Multiplayer Game (implemented - prompts for game ID, waits for game to start)
   - ✅ Network game play (implemented - real-time synchronization of player positions, bullets, hives, snipes)
+  - ✅ Player visibility synchronization (fixed - all players can now see each other)
+  - ✅ Hive synchronization (fixed - hives visible to all players on game start and when joining)
+  - ✅ Server configuration UI (implemented - configure server address/port, status display)
+  - ⚠️ Bullet synchronization (partially working, needs refinement)
   - ⚠️ Full game state synchronization (scores, lives) - partially implemented, needs refinement
   - ✅ Multiplayer game end/results screen (implemented - shows rankings and scores when all players lose lives)
   - ❌ Option to restart another game with all the same players
   - ❌ Level progression synchronization in multiplayer (currently host-only)
+- Technical Debt
+  - ⚠️ Update Terminal.Gui library to latest develop branch (may require significant rework)
+  - ⚠️ Fix global [ESC] key handling across all screens
+  - ⚠️ Extensive testing needed for multiplayer stability
 
 
 
@@ -83,6 +172,7 @@ So what's left to do:
   - **Start Multiplayer**: Host a new multiplayer game (1-5 players, 60-second join window)
   - **Join Multiplayer**: Join an existing multiplayer game by entering a 6-character game ID
   - **Initials**: Allows setting 2-character player initials (A-Z, 0-9)
+  - **Configure Server**: Configure gRPC server address and port (saved to nsnipes.json)
   - **Exit**: Exits the application
 - Menu navigation:
   - Arrow keys or numeric keypad (2/8) to navigate
@@ -219,11 +309,12 @@ So what's left to do:
 ### Menu Navigation (Intro Screen)
 - **Arrow Keys** or **Numeric Keypad (2, 8)**: Navigate menu up/down
 - **ENTER**: Select current menu option
-- **S**: Quick select "Start a New Game"
-- **M**: Quick select "Start Multiplayer"
-- **J**: Quick select "Join Multiplayer"
-- **I**: Quick select "Initials"
-- **E** or **X**: Quick select "Exit"
+  - **S**: Quick select "Start a New Game"
+  - **M**: Quick select "Start Multiplayer"
+  - **J**: Quick select "Join Multiplayer"
+  - **I**: Quick select "Initials"
+  - **C**: Quick select "Configure Server"
+  - **E** or **X**: Quick select "Exit"
 - **ESC**: From intro screen exits application; from game returns to intro screen
 
 ### Initials Input
@@ -236,7 +327,73 @@ So what's left to do:
 
 ## Recent Changes
 
-### Build Script Enhancement (Latest)
+### Multiplayer Synchronization Fixes (Latest)
+- **Player Visibility Fix**: Fixed issue where Player 2 couldn't see Player 1
+  - Problem: Position updates were received but network players weren't being created if player wasn't in game session
+  - Solution: Network players are now created from position updates even if not yet in game session (with default values)
+  - Players are automatically added to game session for consistency
+- **Hive Synchronization**: Fixed issue where hives weren't visible to joining players
+  - Host now sends complete game state snapshot when players join (includes hives, snipes, and all player positions)
+  - Game state snapshot sent both when game starts and when players join mid-game
+  - Clients properly process and display all hives from the snapshot
+- **Game State Snapshot Improvements**:
+  - Host includes all players in snapshot (from game session, not just network players)
+  - Ensures newly joined players receive complete game state
+  - Snapshot includes hives, snipes, and all player positions with world coordinates
+- **Position Update Reliability**:
+  - Periodic position updates (every 200ms) ensure players are visible even when stationary
+  - Position updates create network players if they don't exist yet
+  - Improved handling of position updates arriving before game state snapshot
+
+### Server Configuration UI (Latest)
+- **Server Configuration Menu**: Added "Configure Server" option to intro screen menu
+  - Allows players to set custom gRPC server address and port
+  - Configuration saved to `nsnipes.json` and persists between sessions
+  - Defaults to `localhost:5000` if not configured
+- **Server Status Display**: Real-time server connectivity status on intro screen
+  - Green indicator when server is online and reachable
+  - Red indicator when server is offline or unreachable
+  - Status checked periodically using lightweight gRPC connectivity test
+  - Positioned at bottom of screen (one row up from absolute bottom)
+
+### Bug Fixes (Latest)
+- **Bullet Removal**: Fixed visual artifacts where bullets weren't removed from screen after hitting targets
+  - Bullets now properly cleared when hitting players, snipes, or hives
+  - Bullets cleared when expired or hit on remote clients
+- **Window Resize Handling**: Fixed map not redrawing when terminal window is resized
+  - Map now redraws immediately when window dimensions change
+  - Proper clearing and redrawing of entire game area on resize
+  - Cached map viewport invalidated on resize
+- **Multiplayer Game Start Flow**: Fixed intro screen being redisplayed instead of waiting for players
+  - Host now immediately shows waiting screen with "Connecting..." game ID
+  - Game ID updates to actual ID once received from server
+  - Proper waiting screen display with player count and join notifications
+- **Menu Display Fixes**:
+  - Fixed missing "Exit" option in menu (incorrect menu item count calculation)
+  - Fixed screen jump when first navigating menu
+  - Moved server status message up by one row for better visibility
+- **Intro Screen Animation**: Fixed menu not appearing after player character exits intro screen
+  - Player character now properly leads banner across screen and exits
+  - Menu appears correctly after animation completes
+  - Proper timing and positioning for smooth animation
+
+### gRPC Multiplayer Implementation
+- **Replaced MQTT with gRPC**: Complete migration from MQTT to gRPC for multiplayer networking
+  - **Why gRPC?**: Lower latency, better performance, type-safe protocol buffers, built-in .NET support
+  - **Server Architecture**: Dedicated gRPC server (`NSnipes.GrpcServer`) manages game rooms and message routing
+  - **Client Architecture**: `GrpcGameClient` replaces `MqttGameClient` with bidirectional streaming
+  - **Protocol Buffers**: All game messages defined in `game.proto` for efficient binary serialization
+- **Server Scripts**: Added `run-server.sh` and `run-server.ps1` for easy server startup
+  - Default server address: `http://localhost:5000`
+  - Same `-build` flag support as client scripts
+- **Improved Latency**: gRPC's binary protocol and HTTP/2 provide significantly lower latency than MQTT
+- **Type Safety**: Protocol buffers provide compile-time type checking for all game messages
+- **Better Error Handling**: Structured error responses and connection management
+- **Bidirectional Streaming**: Real-time game messages flow through a single persistent connection
+- **Game Room Management**: Server manages game rooms, player connections, and message routing
+- **Backward Compatibility**: Single-player mode unchanged (no network required)
+
+### Build Script Enhancement
 - **run.sh Script Update**: Modified `run.sh` to support optional building
   - Default behavior: `./run.sh` runs without rebuilding (uses `--no-build` flag)
   - Build flag: `./run.sh -build` rebuilds the project before running
@@ -272,7 +429,11 @@ So what's left to do:
 - **Multiplayer Support**: Game over triggers when ALL players lose all lives, showing all player scores
 
 ### Multiplayer Implementation
-- **MQTT Networking**: Implemented full multiplayer support using MQTT protocol
+- **gRPC Networking**: Implemented full multiplayer support using gRPC protocol (replaced MQTT)
+  - **Server**: Dedicated gRPC server manages game rooms and message routing
+  - **Client**: `GrpcGameClient` handles connection, game creation/joining, and bidirectional streaming
+  - **Protocol Buffers**: All game messages defined in `.proto` files for efficient binary serialization
+  - **Bidirectional Streaming**: Real-time game messages flow through persistent HTTP/2 connections
 - **Game Discovery**: Host can create games with 6-character game IDs, clients can join by ID
 - **Real-time Synchronization**: Player positions, bullets, hives, and snipes synchronized across all clients
 - **Host-Client Architecture**: Host is authoritative for game state (hives, snipes), all players can move and shoot
@@ -280,8 +441,8 @@ So what's left to do:
 - **Position Synchronization**: Fixed initial position sync issues, proper world coordinate system
 - **Respawn Synchronization**: Player respawn positions properly synchronized across network
 - **Initials Synchronization**: Player initials correctly displayed for all players
-- **Network Message System**: Comprehensive DTO system for all game events (positions, bullets, game state)
-- **Single Player Mode**: When starting multiplayer with 1 player, game starts immediately without MQTT (local play only)
+- **Network Message System**: Comprehensive protocol buffer messages for all game events (positions, bullets, game state)
+- **Single Player Mode**: When starting multiplayer with 1 player, game starts immediately without network (local play only)
 
 ### Intro Screen and Menu System
 - **Intro Screen**: Added animated NSNIPES banner that scrolls in from the left over 2 seconds
@@ -422,8 +583,8 @@ So what's left to do:
 ✅ Efficient rendering (HashSet-based position tracking for snipes)  
 ✅ Smooth animations (player eyes, hive colors, clearing effects)  
 ✅ Code organization (IntroScreen class separated from Game class)  
-✅ MQTT networking infrastructure (MqttGameClient, GameSession classes)  
-✅ Network message serialization (JSON-based DTOs for all game events)  
+✅ gRPC networking infrastructure (GrpcGameClient, GameSession classes, gRPC server)  
+✅ Network message serialization (Protocol buffer messages for all game events)  
 ✅ World coordinate system (all positions in map space, viewport conversion local)  
 
 ## Multiplayer Features
@@ -432,15 +593,18 @@ So what's left to do:
 
 **Game Discovery and Joining**
 - Host can start a multiplayer game (1-5 players)
-- **Single Player Mode**: If host selects 1 player, game starts immediately without MQTT (local play only, no network overhead)
-- **Multiplayer Mode**: If host selects 2-5 players, uses MQTT networking with 60-second join window
+- **Single Player Mode**: If host selects 1 player, game starts immediately without network (local play only, no network overhead)
+- **Multiplayer Mode**: If host selects 2-5 players, uses gRPC networking with 60-second join window
 - 6-character alphanumeric game ID for easy sharing (only used for 2+ player games)
 - Real-time player count updates ("X of Y players joined")
 - Player join notifications ("[Initials] joined!")
 - Game automatically starts after join window expires or max players reached
 
 **Network Architecture**
-- MQTT-based networking using HiveMQ public broker
+- **gRPC-based networking** using dedicated server (default: `localhost:5000`)
+- **Server Management**: gRPC server manages game rooms, player connections, and message routing
+- **Bidirectional Streaming**: Real-time game messages flow through persistent HTTP/2 connections
+- **Protocol Buffers**: Efficient binary serialization for all game messages
 - Host-client architecture (host is authoritative for game state)
 - Real-time position synchronization (20ms update rate)
 - Bullet synchronization across all players
@@ -460,6 +624,10 @@ So what's left to do:
 - Game state snapshots on game start (ensures all players start with same state)
 
 **Technical Implementation**
+- **gRPC Server**: Dedicated server (`NSnipes.GrpcServer`) manages all multiplayer connections
+- **Protocol Buffers**: Type-safe, efficient binary serialization for all game messages
+- **Bidirectional Streaming**: Single persistent connection per player for all game messages
+- **HTTP/2**: Modern protocol with multiplexing and header compression
 - World coordinate system (all positions in map space, converted to viewport locally)
 - Proper viewport position tracking for artifact-free rendering
 - Network latency handling (latest position updates, not every intermediate step)
@@ -468,9 +636,14 @@ So what's left to do:
 
 ### ⚠️ Known Issues / Limitations
 
-- Initial position synchronization may have minor timing issues
-- Full game state synchronization (scores, lives) still being refined
-- Level progression in multiplayer is host-only (clients receive level updates but don't trigger progression)
+- **Bullet Synchronization**: Bullets in multiplayer are not fully synchronized - needs refinement
+- **Terminal.Gui Library Update**: Need to update to latest develop branch
+  - May require significant rework as direct terminal driver access has been deprecated
+  - Will need to figure out alternative approach for low-level terminal operations
+- **Global ESC Key Handling**: Need to sort out global [ESC] key behavior across all screens
+- **Level Progression**: Level progression in multiplayer is host-only (clients receive level updates but don't trigger progression)
+- **Full Game State Sync**: Full game state synchronization (scores, lives) still being refined
+- **Testing**: Extensive testing needed for multiplayer stability and edge cases
 
 ## Not Yet Implemented
 
@@ -487,7 +660,10 @@ So what's left to do:
 
 This project is built with the following dependencies:
 - https://github.com/gui-cs/Terminal.Gui (v2.0.0-prealpha.1895)
-- MQTTnet (for multiplayer networking via MQTT)
+- **Grpc.Net.Client** (v2.62.0) - gRPC client for .NET
+- **Grpc.AspNetCore** (v2.62.0) - gRPC server for ASP.NET Core
+- **Google.Protobuf** (v3.25.3) - Protocol buffer runtime
+- **Grpc.Tools** (v2.62.0) - Protocol buffer compiler tools
 
 ## Map Generation
 
