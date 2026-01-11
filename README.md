@@ -14,10 +14,33 @@ This is an exercise in programming and networking as much as it is a journey int
 
 ## Building and Running
 
-Use the provided `run.sh` script to build and run the game:
+Use the provided scripts to run the game:
+
+### Linux/macOS (Bash)
+
+**Run without rebuilding** (uses already-built executable):
 ```bash
 ./run.sh
 ```
+
+**Build and run** (rebuilds before running):
+```bash
+./run.sh -build
+```
+
+### Windows (PowerShell)
+
+**Run without rebuilding** (uses already-built executable):
+```powershell
+.\run.ps1
+```
+
+**Build and run** (rebuilds before running):
+```powershell
+.\run.ps1 -build
+```
+
+**Note**: The default behavior (without `-build` flag) runs the game without rebuilding, which is useful for multiplayer testing where you want to build in one terminal and run in multiple terminals without rebuilding each time.
 
 ![Intro Screen](./nsnipes-intro.png)
 The 'Intro Screen' will change quite a bit as multi-player gaming is added
@@ -212,6 +235,16 @@ So what's left to do:
 - **ESC**: Cancel input
 
 ## Recent Changes
+
+### Build Script Enhancement (Latest)
+- **run.sh Script Update**: Modified `run.sh` to support optional building
+  - Default behavior: `./run.sh` runs without rebuilding (uses `--no-build` flag)
+  - Build flag: `./run.sh -build` rebuilds the project before running
+  - Useful for multiplayer testing: build once in one terminal, run in multiple terminals without rebuilding
+- **run.ps1 Script Added**: Created PowerShell version for Windows compatibility
+  - Default behavior: `.\run.ps1` runs without rebuilding (uses `--no-build` flag)
+  - Build flag: `.\run.ps1 -build` rebuilds the project before running
+  - Same functionality as `run.sh` for cross-platform support
 
 ### Bug Fixes (Latest)
 - **Snipe Count Display Fix**: Fixed incorrect snipe count display (was showing 80/40 instead of 40/40)
