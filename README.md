@@ -12,6 +12,8 @@ So this will be a 'stylised' version.  It's also 'my' version because I'm not tr
 
 This is an exercise in programming and networking as much as it is a journey into my distant memories.
 
+![Example NSnipes Game](./nsnipes-animation.gif)
+
 ## Building and Running
 
 ### Starting the gRPC Server
