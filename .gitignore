@@ -1,11 +1,16 @@
-﻿################################################################################
+################################################################################
 # This .gitignore file was automatically created by Microsoft(R) Visual Studio.
 ################################################################################
 
 /.vs/*
-/NSnipes/bin/Debug/net9.0
-/NSnipes/obj
+/NSnipes/bin/
+/NSnipes/obj/
 /NSnipes/.DS_Store
-/NSnipes/bin/*
+/NSnipes.GrpcServer/bin/
+/NSnipes.GrpcServer/obj/
 .DS_Store
 nsnipes.json
+
+# Build results
+**/bin/
+**/obj/
