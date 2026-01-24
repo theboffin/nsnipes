@@ -19,9 +19,9 @@ public class Game : Window
     private int _lastFrameWidth;
     private int _lastFrameHeight;
     private bool _mapDrawn = false;
-    private readonly List<Bullet> _bullets = new List<Bullet>();
-    private readonly List<Hive> _hives = new List<Hive>();
-    private readonly List<Snipe> _snipes = new List<Snipe>();
+    private readonly List<Bullet> _bullets = new List<Bullet>(MaxBullets);
+    private readonly List<Hive> _hives = new List<Hive>(15); // Max ~15 hives at higher levels
+    private readonly List<Snipe> _snipes = new List<Snipe>(100); // Can have many active snipes
     private readonly GameState _gameState = new GameState();
     private const int MaxBullets = 10;
     private const double BulletSpeed = 1.0; // Bullets move 1.0 cell per update (10ms) to ensure proper wall collision
@@ -36,7 +36,7 @@ public class Game : Window
     // Frame rate tracking
     private DateTime _lastFrameTime = DateTime.Now;
     private double _currentFPS = 0.0;
-    private readonly Queue<double> _fpsHistory = new Queue<double>();
+    private readonly Queue<double> _fpsHistory = new Queue<double>(FpsHistorySize);
     private const int FpsHistorySize = 10; // Average over last 10 frames
     
     // Cached DateTime for current frame/update cycle to avoid excessive DateTime.Now calls
@@ -49,14 +49,14 @@ public class Game : Window
     // Multiplayer
     private GrpcGameClient? _grpcClient;
     private GameSession? _gameSession;
-    private Dictionary<string, PlayerNetwork> _networkPlayers = new Dictionary<string, PlayerNetwork>();
+    private Dictionary<string, PlayerNetwork> _networkPlayers = new Dictionary<string, PlayerNetwork>(10); // Max 5 players, 10 for safety
     private bool _isMultiplayer = false;
     private int _positionSequence = 0; // Sequence number for position updates
     private DateTime _lastPositionPublish = DateTime.Now;
     private const int PositionPublishIntervalMs = 20; // Publish position every 20ms when moved for smoother updates
 
     // Key state tracking for smooth movement
-    private Dictionary<string, DateTime> _pressedKeys = new Dictionary<string, DateTime>();
+    private Dictionary<string, DateTime> _pressedKeys = new Dictionary<string, DateTime>(8); // Max 8 directions (cardinal + diagonal)
     private const int KeyRepeatThresholdMs = 60; // Consider key released if not seen in 60ms (reduced for faster response)
 
     public Game(IApplication app)
@@ -524,7 +524,7 @@ public class Game : Window
 
         // Clean up old key presses (keys not seen recently are considered released)
         // Use a more aggressive cleanup to detect key releases faster
-        var keysToRemove = new List<string>();
+        var keysToRemove = new List<string>(_pressedKeys.Count); // Pre-allocate with expected size
         foreach (var kvp in _pressedKeys)
         {
             // Remove keys that haven't been refreshed recently
@@ -1629,9 +1629,14 @@ public class Game : Window
         
         // Publish all current snipe positions (periodic update)
         // IMPORTANT: All coordinates must be WORLD/MAP coordinates, not viewport
-        var aliveSnipes = _snipes.Where(s => s.IsAlive).ToList();
+        // Count alive snipes first to pre-allocate list capacity
+        int aliveCount = 0;
+        foreach (var s in _snipes)
+        {
+            if (s.IsAlive) aliveCount++;
+        }
         
-        if (aliveSnipes.Count > 0)
+        if (aliveCount > 0)
         {
             var gameMessage = new GameMessage
             {
@@ -1640,8 +1645,13 @@ public class Game : Window
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 Snipes = new SnipeUpdates()
             };
-            foreach (var s in aliveSnipes)
+            // Pre-allocate capacity for snipe updates
+            gameMessage.Snipes.Updates.Capacity = aliveCount;
+            
+            foreach (var s in _snipes)
             {
+                if (!s.IsAlive) continue;
+                
                 gameMessage.Snipes.Updates.Add(new SnipeUpdateInfo
                 {
                     SnipeId = s.SnipeId,
@@ -1787,7 +1797,7 @@ public class Game : Window
             // to match what was actually drawn. We don't update them here.
 
             // Get all possible valid directions
-            List<(int dx, int dy)> possibleDirections = new List<(int, int)>();
+            List<(int dx, int dy)> possibleDirections = new List<(int, int)>(8); // Max 8 directions
 
             // Try all 8 possible directions (including diagonals)
             for (int dx = -1; dx <= 1; dx++)
@@ -2074,7 +2084,7 @@ public class Game : Window
         // Step 1: Build a list of all positions that snipes PREVIOUSLY occupied
         // This includes both '@' character positions and arrow positions from the last frame
         // We ALWAYS add previous positions, even if snipe hasn't moved (direction might have changed)
-        HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>();
+        HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>(_snipes.Count * 2); // Each snipe has 2 positions (@ + arrow)
 
         foreach (var snipe in _snipes)
         {
@@ -2667,7 +2677,7 @@ public class Game : Window
     {
         // Check if all players have lost all lives
         bool allPlayersDead = true;
-        List<PlayerScoreInfo> playerScores = new List<PlayerScoreInfo>();
+        List<PlayerScoreInfo> playerScores = new List<PlayerScoreInfo>(_networkPlayers.Count + 1); // Local player + network players
         
         if (_isMultiplayer && _gameSession != null)
         {
@@ -3395,8 +3405,17 @@ public class Game : Window
             {
                 _introScreen.UpdatePlayerJoin(message.PlayerJoin.Initials);
                 
-                // Update game session
-                if (!_gameSession.Players.Any(p => p.PlayerId == message.PlayerJoin.PlayerId))
+                // Update game session - avoid LINQ Any()
+                bool playerExists = false;
+                foreach (var p in _gameSession.Players)
+                {
+                    if (p.PlayerId == message.PlayerJoin.PlayerId)
+                    {
+                        playerExists = true;
+                        break;
+                    }
+                }
+                if (!playerExists)
                 {
                     _gameSession.Players.Add(new NetworkPlayerInfo
                     {
@@ -3458,7 +3477,17 @@ public class Game : Window
                     {
                         foreach (var playerInfo in message.PlayerCount.Players)
                         {
-                            if (!_gameSession.Players.Any(p => p.PlayerId == playerInfo.PlayerId))
+                            // Avoid LINQ Any() - iterate directly
+                            bool playerExists = false;
+                            foreach (var p in _gameSession.Players)
+                            {
+                                if (p.PlayerId == playerInfo.PlayerId)
+                                {
+                                    playerExists = true;
+                                    break;
+                                }
+                            }
+                            if (!playerExists)
                             {
                                 _gameSession.Players.Add(new NetworkPlayerInfo
                                 {
@@ -3479,7 +3508,16 @@ public class Game : Window
                 // Initialize network players
                 foreach (var playerId in message.GameStart.PlayerIds)
                 {
-                    var playerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == playerId);
+                    // Avoid LINQ FirstOrDefault - iterate directly
+                    NetworkPlayerInfo? playerInfo = null;
+                    foreach (var p in _gameSession.Players)
+                    {
+                        if (p.PlayerId == playerId)
+                        {
+                            playerInfo = p;
+                            break;
+                        }
+                    }
                     if (playerInfo != null)
                     {
                         var networkPlayer = new PlayerNetwork(
@@ -3535,8 +3573,16 @@ public class Game : Window
                 }
                 else
                 {
-                    // New player - try to find their info from game session first
-                    var sessionPlayerInfo = _gameSession.Players.FirstOrDefault(p => p.PlayerId == message.PlayerId);
+                    // New player - try to find their info from game session first (avoid LINQ FirstOrDefault)
+                    NetworkPlayerInfo? sessionPlayerInfo = null;
+                    foreach (var p in _gameSession.Players)
+                    {
+                        if (p.PlayerId == message.PlayerId)
+                        {
+                            sessionPlayerInfo = p;
+                            break;
+                        }
+                    }
                     var isLocalPlayer = message.PlayerId == _gameSession.PlayerId;
                     
                     // Create network player even if not in game session (position updates can arrive before game state)
@@ -3681,8 +3727,19 @@ public class Game : Window
                 }
                 else
                 {
-                    // New player not in our network players list - create them
-                    var playerInfo = _gameSession?.Players.FirstOrDefault(p => p.PlayerId == playerState.PlayerId);
+                    // New player not in our network players list - create them (avoid LINQ FirstOrDefault)
+                    NetworkPlayerInfo? playerInfo = null;
+                    if (_gameSession != null)
+                    {
+                        foreach (var p in _gameSession.Players)
+                        {
+                            if (p.PlayerId == playerState.PlayerId)
+                            {
+                                playerInfo = p;
+                                break;
+                            }
+                        }
+                    }
                     var isLocalPlayer = playerState.PlayerId == _gameSession?.PlayerId;
                     
                     // Create network player even if not in game session (shouldn't happen, but be safe)
@@ -3752,7 +3809,16 @@ public class Game : Window
             }
             else if (update.Action == "moved")
             {
-                var snipe = _snipes.FirstOrDefault(s => s.SnipeId == update.SnipeId);
+                // Avoid LINQ FirstOrDefault - iterate directly
+                Snipe? snipe = null;
+                foreach (var s in _snipes)
+                {
+                    if (s.SnipeId == update.SnipeId)
+                    {
+                        snipe = s;
+                        break;
+                    }
+                }
                 if (snipe != null)
                 {
                     snipe.X = update.X;
@@ -3779,7 +3845,16 @@ public class Game : Window
             }
             else if (update.Action == "hit")
             {
-                var hive = _hives.FirstOrDefault(h => $"hive_{h.X}_{h.Y}" == update.HiveId);
+                // Avoid LINQ FirstOrDefault - iterate directly
+                Hive? hive = null;
+                foreach (var h in _hives)
+                {
+                    if ($"hive_{h.X}_{h.Y}" == update.HiveId)
+                    {
+                        hive = h;
+                        break;
+                    }
+                }
                 if (hive != null)
                 {
                     hive.Hits = update.Hits;
@@ -3803,8 +3878,16 @@ public class Game : Window
         }
         else if (bulletMsg.Action == "updated")
         {
-            // Update existing bullet
-            var bullet = _bullets.FirstOrDefault(b => b.BulletId == bulletMsg.BulletId);
+            // Update existing bullet - avoid LINQ FirstOrDefault
+            Bullet? bullet = null;
+            foreach (var b in _bullets)
+            {
+                if (b.BulletId == bulletMsg.BulletId)
+                {
+                    bullet = b;
+                    break;
+                }
+            }
             if (bullet != null)
             {
                 bullet.X = bulletMsg.X;
@@ -3815,8 +3898,16 @@ public class Game : Window
         }
         else if (bulletMsg.Action == "expired" || bulletMsg.Action == "hit")
         {
-            // Find and clear the bullet before removing it
-            var bullet = _bullets.FirstOrDefault(b => b.BulletId == bulletMsg.BulletId);
+            // Find and clear the bullet before removing it - avoid LINQ FirstOrDefault
+            Bullet? bullet = null;
+            foreach (var b in _bullets)
+            {
+                if (b.BulletId == bulletMsg.BulletId)
+                {
+                    bullet = b;
+                    break;
+                }
+            }
             if (bullet != null)
             {
                 // Get viewport information to clear the bullet
@@ -4016,7 +4107,12 @@ public class Game : Window
                 Level = _gameState.Level
             }
         };
-        gameMessage.GameStart.PlayerIds.AddRange(_gameSession.Players.Select(p => p.PlayerId));
+        // Avoid LINQ Select allocation - iterate directly
+        gameMessage.GameStart.PlayerIds.Capacity = _gameSession.Players.Count;
+        foreach (var player in _gameSession.Players)
+        {
+            gameMessage.GameStart.PlayerIds.Add(player.PlayerId);
+        }
         if (_grpcClient != null)
         {
             await _grpcClient.SendGameMessageAsync(gameMessage);

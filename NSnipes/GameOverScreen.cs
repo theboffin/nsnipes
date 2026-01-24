@@ -23,7 +23,7 @@ public class GameOverScreen : View
     
     private DateTime _bannerStartTime;
     private int _bannerScrollPosition = 0;
-    private List<PlayerScoreInfo> _playerScores = new List<PlayerScoreInfo>();
+    private List<PlayerScoreInfo> _playerScores = new List<PlayerScoreInfo>(5); // Max 5 players
     
     // Events
     public event Action? OnReturnToIntro; // Called when ENTER is pressed to return to intro screen
@@ -126,7 +126,10 @@ public class GameOverScreen : View
         _waitingForEnter = false;
         _bannerStartTime = DateTime.Now;
         _bannerScrollPosition = 0;
-        _playerScores = playerScores.OrderByDescending(p => p.Score).ToList();
+        // Sort in-place to avoid LINQ ToList() allocation
+        _playerScores = new List<PlayerScoreInfo>(playerScores.Count);
+        _playerScores.AddRange(playerScores);
+        _playerScores.Sort((a, b) => b.Score.CompareTo(a.Score)); // Descending order
         Visible = true;
         SetNeedsDraw();
     }

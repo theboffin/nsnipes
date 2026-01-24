@@ -27,13 +27,19 @@ public class GameSession
     public int CurrentPlayers { get; set; } = 0;
     public DateTime CreatedAt { get; set; }
     public DateTime? StartTime { get; set; }
-    public List<NetworkPlayerInfo> Players { get; set; } = new List<NetworkPlayerInfo>();
+    public List<NetworkPlayerInfo> Players { get; set; } = new List<NetworkPlayerInfo>(5); // Max 5 players
     
     public static string GenerateGameId()
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        return new string(Enumerable.Repeat(chars, 6)
-            .Select(s => s[Random.Shared.Next(s.Length)]).ToArray());
+        // Avoid LINQ allocations - use stackalloc for small array
+        Span<char> buffer = stackalloc char[6];
+        var random = new Random();
+        for (int i = 0; i < 6; i++)
+        {
+            buffer[i] = chars[random.Next(chars.Length)];
+        }
+        return new string(buffer);
     }
     
     public static string GeneratePlayerId()

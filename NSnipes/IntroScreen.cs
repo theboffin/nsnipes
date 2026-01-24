@@ -67,7 +67,7 @@ public class IntroScreen : View
     private int _currentPlayerCount = 0;
     private int _maxPlayers = 1;
     private int _timeRemaining = 60;
-    private List<string> _joinedPlayers = new List<string>(); // List of player initials who joined
+    private List<string> _joinedPlayers = new List<string>(5); // Max 5 players
     private DateTime _joinWaitStartTime = DateTime.Now;
     
     // Server configuration state
