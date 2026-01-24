@@ -43,8 +43,7 @@ public class Hive
         if (SnipesType2 > 0 && SnipesType3 > 0)
         {
             // Randomly choose between the two
-            Random random = new Random();
-            return random.Next(2) == 0 ? 'A' : 'B';
+            return Random.Shared.Next(2) == 0 ? 'A' : 'B';
         }
         else if (SnipesType2 > 0)
         {

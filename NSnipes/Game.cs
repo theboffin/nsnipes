@@ -26,7 +26,6 @@ public class Game : Window
     private const int MaxBullets = 10;
     private const double BulletSpeed = 1.0; // Bullets move 1.0 cell per update (10ms) to ensure proper wall collision
     private const int StatusBarHeight = 2; // First 2 rows reserved for status information
-    private Random _random = new Random();
 
     // Performance optimization: Track previous positions to avoid unnecessary redraws
     private int _previousPlayerViewportX = -1;
@@ -1554,7 +1553,7 @@ public class Game : Window
 
             // Random chance to spawn (roughly every 3 seconds, but randomized)
             int timeSinceLastSpawn = (int)(DateTime.Now - hive.LastSpawnTime).TotalMilliseconds;
-            if (timeSinceLastSpawn >= Hive.SpawnIntervalMs + _random.Next(-1000, 1000))
+            if (timeSinceLastSpawn >= Hive.SpawnIntervalMs + Random.Shared.Next(-1000, 1000))
             {
                 // Spawn snipe at hive position (center of 2x2 hive)
                 int snipeX = hive.X + 1; // Center of hive
@@ -1565,16 +1564,16 @@ public class Game : Window
 
                 // Give snipe a random initial direction
                 int[] directions = new int[] { -1, 0, 1 };
-                snipe.DirectionX = directions[_random.Next(3)];
-                snipe.DirectionY = directions[_random.Next(3)];
+                snipe.DirectionX = directions[Random.Shared.Next(3)];
+                snipe.DirectionY = directions[Random.Shared.Next(3)];
 
                 // Ensure snipe has some direction (not both 0)
                 if (snipe.DirectionX == 0 && snipe.DirectionY == 0)
                 {
-                    if (_random.Next(2) == 0)
-                        snipe.DirectionX = _random.Next(2) == 0 ? -1 : 1;
+                    if (Random.Shared.Next(2) == 0)
+                        snipe.DirectionX = Random.Shared.Next(2) == 0 ? -1 : 1;
                     else
-                        snipe.DirectionY = _random.Next(2) == 0 ? -1 : 1;
+                        snipe.DirectionY = Random.Shared.Next(2) == 0 ? -1 : 1;
                 }
 
                 _snipes.Add(snipe);
@@ -1819,10 +1818,10 @@ public class Game : Window
             {
                 // Current direction is valid and player is far - wander through maze
                 // Occasionally change direction to explore (20% chance)
-                if (_random.Next(100) < 20)
+                if (Random.Shared.Next(100) < 20)
                 {
                     // Choose a random valid direction to explore
-                    chosenDirection = possibleDirections[_random.Next(possibleDirections.Count)];
+                    chosenDirection = possibleDirections[Random.Shared.Next(possibleDirections.Count)];
                 }
                 else
                 {
@@ -1857,13 +1856,13 @@ public class Game : Window
                 else
                 {
                     // Hit a wall and player is close - randomly choose from valid directions
-                    chosenDirection = possibleDirections[_random.Next(possibleDirections.Count)];
+                    chosenDirection = possibleDirections[Random.Shared.Next(possibleDirections.Count)];
                 }
             }
             else
             {
                 // Current direction hit a wall (not valid) and player is far - randomly choose new direction
-                chosenDirection = possibleDirections[_random.Next(possibleDirections.Count)];
+                chosenDirection = possibleDirections[Random.Shared.Next(possibleDirections.Count)];
             }
 
             // Move snipe
@@ -2498,7 +2497,6 @@ public class Game : Window
 
     private (int x, int y) FindRandomValidPosition()
     {
-        Random random = new Random();
         const int MAX_ATTEMPTS = 1000; // Prevent infinite loop
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
@@ -2506,8 +2504,8 @@ public class Game : Window
             // Pick a random position on the map
             // Player is 2 columns wide, so X must be at least 1 from the right edge
             // Player is 3 rows tall, so Y must be at least 2 from the bottom edge
-            int x = random.Next(0, _map.MapWidth - 1); // -1 because we need 2 columns
-            int y = random.Next(0, _map.MapHeight - 2); // -2 because we need 3 rows
+            int x = Random.Shared.Next(0, _map.MapWidth - 1); // -1 because we need 2 columns
+            int y = Random.Shared.Next(0, _map.MapHeight - 2); // -2 because we need 3 rows
 
             // Check if all 6 cells (2x3) at this position are walkable
             if (IsPositionValid(x, y))
@@ -2780,14 +2778,13 @@ public class Game : Window
 
     private (int x, int y) FindRandomValidHivePosition()
     {
-        Random random = new Random();
         const int MAX_ATTEMPTS = 1000;
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
         {
             // Hive is 2x2, so we need space for that
-            int x = random.Next(0, _map.MapWidth - 1); // -1 because we need 2 columns
-            int y = random.Next(0, _map.MapHeight - 1); // -1 because we need 2 rows
+            int x = Random.Shared.Next(0, _map.MapWidth - 1); // -1 because we need 2 columns
+            int y = Random.Shared.Next(0, _map.MapHeight - 1); // -1 because we need 2 rows
 
             // Check if the 2x2 area is valid and doesn't overlap with player or existing hives
             if (IsHivePositionValid(x, y))
@@ -4058,13 +4055,12 @@ public class Game : Window
     
     private (int x, int y) FindRandomValidPositionForMultiplayer()
     {
-        Random random = new Random();
         const int MAX_ATTEMPTS = 1000;
         
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
         {
-            int x = random.Next(0, _map.MapWidth - 1);
-            int y = random.Next(0, _map.MapHeight - 2);
+            int x = Random.Shared.Next(0, _map.MapWidth - 1);
+            int y = Random.Shared.Next(0, _map.MapHeight - 2);
             
             // Check if position is valid (not on walls, not on hives, not on other players)
             if (IsPositionValid(x, y) && !IsPositionOverlappingPlayers(x, y))
