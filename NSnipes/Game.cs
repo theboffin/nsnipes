@@ -1,13 +1,19 @@
-using Terminal.Gui;
+using Terminal.Gui.App;
+using Terminal.Gui.Views;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Input;
+using Terminal.Gui.Drawing;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using NSnipes.GrpcServer;
+using DrawingAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace NSnipes;
 
 public class Game : Window
 {
+    private readonly IApplication _app;
     private readonly Map _map;
     private readonly Player _player;
     private int _lastFrameWidth;
@@ -23,24 +29,16 @@ public class Game : Window
     private Random _random = new Random();
 
     // Performance optimization: Track previous positions to avoid unnecessary redraws
-    private int _previousPlayerCellX = -1;
-    private int _previousPlayerCellY = -1;
     private int _previousPlayerViewportX = -1;
     private int _previousPlayerViewportY = -1;
     private string[]? _cachedMapViewport = null;
     private DateTime _cachedDateTime = DateTime.MinValue;
-    private int _cachedHivesUndestroyed = -1;
-    private int _cachedSnipesUndestroyed = -1;
-    private int _cachedLives = -1;
-    private int _cachedLevel = -1;
-    private int _cachedScore = -1;
     
     // Frame rate tracking
     private DateTime _lastFrameTime = DateTime.Now;
     private double _currentFPS = 0.0;
     private readonly Queue<double> _fpsHistory = new Queue<double>();
     private const int FpsHistorySize = 10; // Average over last 10 frames
-    private int _cachedFPS = -1;
 
     // Intro screen
     private IntroScreen _introScreen;
@@ -56,11 +54,12 @@ public class Game : Window
     private const int PositionPublishIntervalMs = 20; // Publish position every 20ms when moved for smoother updates
 
     // Key state tracking for smooth movement
-    private Dictionary<KeyCode, DateTime> _pressedKeys = new Dictionary<KeyCode, DateTime>();
+    private Dictionary<string, DateTime> _pressedKeys = new Dictionary<string, DateTime>();
     private const int KeyRepeatThresholdMs = 60; // Consider key released if not seen in 60ms (reduced for faster response)
 
-    public Game()
+    public Game(IApplication app)
     {
+        _app = app;
         // Load configuration (initials)
         _config = GameConfig.Load();
 
@@ -86,7 +85,7 @@ public class Game : Window
         };
         _introScreen.OnExit += () =>
         {
-            Application.RequestStop();
+            _app.RequestStop();
         };
         _introScreen.OnInitialsChanged += (initials) =>
         {
@@ -116,6 +115,10 @@ public class Game : Window
             await JoinGame(gameId);
         };
         _introScreen.SetMapCharCallback((x, y) => GetMapCharAtPosition(x, y));
+        
+        // Add IntroScreen as a child view so it can render
+        Add(_introScreen);
+        
         _introScreen.Show();
 
         Title = "NSnipes";
@@ -127,92 +130,69 @@ public class Game : Window
         Height = Dim.Fill();
 
         // Prevent default Escape key behavior (we handle it ourselves)
-        Modal = false;
         CanFocus = true;
+        
+        // Note: Modal and Border properties don't exist in Terminal.Gui v2
+        // ColorScheme is set differently in v2 - using default for now
 
-        // Remove border if possible
-        if (Border != null)
+        // Handle keyboard input using IApplication.Keyboard.KeyDown
+        _app.Keyboard.KeyDown += (sender, key) =>
         {
-            Border.BorderStyle = LineStyle.None;
-        }
-
-        ColorScheme = new ColorScheme()
-        {
-            Normal = new Terminal.Gui.Attribute(Color.Gray, Color.Black),
-            Focus = new Terminal.Gui.Attribute(Color.White, Color.Black),
-            Disabled = new Terminal.Gui.Attribute(Color.Blue, Color.Black),
-        };
-
-        // Handle Escape at Application level FIRST to prevent default close behavior
-        // We need to handle this before Terminal.Gui's default Escape handler closes the window
-        Application.KeyDown += (sender, e) =>
-        {
-            if (e.KeyCode == KeyCode.Esc)
+            var keyStr = key.ToString();
+            
+            // Handle Escape key
+            if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
             {
-                // Handle Escape before any default behavior
                 if (_introScreen.IsActive)
                 {
                     // Exit application from intro screen
-                    Application.RequestStop();
+                    _app.RequestStop();
                 }
                 else
                 {
                     // Return to intro screen from game
                     _introScreen.Show();
-                    if (Application.Driver != null)
-                    {
-                        _introScreen.Show();
-                    }
+                    _introScreen.SetNeedsDraw();
                 }
-                // The event is handled, but Terminal.Gui might still process it
-                // We need to prevent the Window from closing
                 return;
             }
+            
             // For other keys, handle them inline
-            HandleKeyDown(sender, e);
+            HandleKeyDown(sender, key);
         };
 
         // Also handle at Window level as backup
         KeyDown += HandleWindowKeyDown;
-
-        Application.SizeChanging += (s, e) =>
-        {
-            // SizeChanging fires before the size changes, so we just invalidate the cache
-            // The dimension check in the timers will detect the change and redraw
-            if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
-            {
-                _cachedMapViewport = null;
-            }
-        };
+        
+        // Note: Application.SizeChanging doesn't exist in v2
+        // Size changes will be detected in the timers via dimension checks
 
         // Timer for intro screen animation and clearing effects (16ms for ~60fps)
-        Application.AddTimeout(TimeSpan.FromMilliseconds(16), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(16), () =>
         {
-            if (Application.Driver != null)
+            if (_introScreen.IsActive || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
             {
-                if (_introScreen.IsActive || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
-                {
-                    _introScreen.Draw();
-                }
+                _introScreen.SetNeedsDraw();
             }
+            // Note: Game drawing is triggered by other timers when needed (movement, bullets, etc.)
             return true;
         });
 
         // Timer for player animation, movement, and initial map draw (40ms for more responsive movement)
-        Application.AddTimeout(TimeSpan.FromMilliseconds(40), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(40), () =>
         {
             if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_mapDrawn)
             {
-                DrawMapAndPlayer();
                 _mapDrawn = true;
+                SetNeedsDraw();
             }
             else if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
                 // Check if window dimensions have changed (e.g., from resize)
-                if (Application.Driver != null)
+                if (true)
                 {
-                    int currentWidth = Application.Driver.Cols;
-                    int currentHeight = Application.Driver.Rows;
+                    int currentWidth = Frame.Width;
+                    int currentHeight = Frame.Height;
                     int frameWidth = currentWidth;
                     int frameHeight = currentHeight - StatusBarHeight;
                     
@@ -220,7 +200,7 @@ public class Game : Window
                     if (frameWidth != _lastFrameWidth || frameHeight != _lastFrameHeight)
                     {
                         _cachedMapViewport = null;
-                        DrawMapAndPlayer();
+                        SetNeedsDraw();
                         return true;
                     }
                 }
@@ -229,8 +209,8 @@ public class Game : Window
                 bool playerMoved = ProcessPlayerMovement();
                 if (playerMoved)
                 {
-                    // Player moved - redraw map and player
-                    DrawMapAndPlayer();
+                    // Player moved - trigger redraw
+                    SetNeedsDraw();
                 }
                 else
                 {
@@ -242,15 +222,15 @@ public class Game : Window
         });
 
         // Separate timer for bullet updates (10ms for smooth movement)
-        Application.AddTimeout(TimeSpan.FromMilliseconds(10), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(10), () =>
         {
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_introScreen.IsActive)
             {
                 // Check if window dimensions have changed (e.g., from resize) - check frequently for responsive resize
-                if (Application.Driver != null)
+                if (true)
                 {
-                    int currentWidth = Application.Driver.Cols;
-                    int currentHeight = Application.Driver.Rows;
+                    int currentWidth = Frame.Width;
+                    int currentHeight = Frame.Height;
                     int frameWidth = currentWidth;
                     int frameHeight = currentHeight - StatusBarHeight;
                     
@@ -258,31 +238,30 @@ public class Game : Window
                     if (frameWidth != _lastFrameWidth || frameHeight != _lastFrameHeight)
                     {
                         _cachedMapViewport = null;
-                        DrawMapAndPlayer();
+                        SetNeedsDraw();
                         return true;
                     }
                 }
                 
                 UpdateBullets();
-                DrawFrame();
+                SetNeedsDraw();
             }
             return true;
         });
 
         // Separate timer for hive animation (75ms for slower color change and better performance)
-        Application.AddTimeout(TimeSpan.FromMilliseconds(75), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(75), () =>
         {
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                DrawHives();
-                DrawStatusBar(); // Update status bar periodically
+                SetNeedsDraw(); // Trigger redraw for hives and status bar
             }
             return true;
         });
         
         // Periodic position update timer for multiplayer (publish position every 200ms even if not moving)
         // This ensures other players can see this player even when stationary
-        Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
         {
             if (_isMultiplayer && _gameSession != null && _gameSession.Status == GameSessionStatus.Playing && 
                 _grpcClient != null && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver)
@@ -295,7 +274,7 @@ public class Game : Window
         });
 
         // Timer for snipe spawning and movement (200ms) - only host runs this
-        Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
         {
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
@@ -306,21 +285,23 @@ public class Game : Window
                     UpdateSnipes();
                     PublishSnipeUpdates(); // Publish snipe state to clients
                 }
-                DrawSnipes(); // All players draw snipes
+                SetNeedsDraw(); // Trigger redraw for snipes
             }
             return true;
         });
     }
 
-    private void HandleWindowKeyDown(object? sender, dynamic e)
+    private void HandleWindowKeyDown(object? sender, Key key)
     {
+        var keyStr = key.ToString();
+        
         // Handle Escape key at Window level to prevent default close behavior
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             if (_introScreen.IsActive)
             {
                 // Exit application from intro screen
-                Application.RequestStop();
+                _app.RequestStop();
             }
             else
             {
@@ -334,16 +315,32 @@ public class Game : Window
         // For other keys, let them process normally
     }
 
-    private void HandleKeyDown(object? sender, dynamic e)
+    protected override bool OnDrawingContent(DrawContext? dc)
     {
+        if (dc == null || !IsInitialized)
+            return false;
+
+        // Only draw game content when intro screen is not active
+        if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
+        {
+            DrawMapAndPlayer();
+        }
+
+        return base.OnDrawingContent(dc);
+    }
+
+    private void HandleKeyDown(object? sender, Key key)
+    {
+        var keyStr = key.ToString();
+        
         // Escape is handled at Application level, so skip it here
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             return;
         }
 
         // Handle intro screen key press (including game over)
-        if (_introScreen.HandleKey(e))
+        if (_introScreen.HandleKey(key))
         {
             return; // Intro screen handled the key
         }
@@ -354,48 +351,66 @@ public class Game : Window
             return;
         }
 
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
 
         // Track movement keys for continuous movement
-        // Update key state when movement keys are pressed
-        // When a new movement key is pressed, immediately trigger movement processing
+        // Normalize key names so they match what ProcessPlayerMovement expects
         bool movementKeyPressed = false;
-        switch (e.KeyCode)
+        string? normalizedKey = null;
+        
+        // Check for movement keys (arrow keys and numeric keypad)
+        if (keyStr.Contains("CursorUp"))
         {
-            case KeyCode.D8: // Numeric keypad 8 (Up)
-            case KeyCode.CursorUp:
-            case KeyCode.D2: // Numeric keypad 2 (Down)
-            case KeyCode.CursorDown:
-            case KeyCode.D4: // Numeric keypad 4 (Left)
-            case KeyCode.CursorLeft:
-            case KeyCode.D6: // Numeric keypad 6 (Right)
-            case KeyCode.CursorRight:
-            case KeyCode.D7: // Numeric keypad 7 (Up-Left diagonal)
-            case KeyCode.D9: // Numeric keypad 9 (Up-Right diagonal)
-            case KeyCode.D1: // Numeric keypad 1 (Down-Left diagonal)
-            case KeyCode.D3: // Numeric keypad 3 (Down-Right diagonal)
-                // Update key state - mark this key as currently pressed with current time
-                // This ensures new key presses are immediately recognized
-                _pressedKeys[e.KeyCode] = DateTime.Now;
+            normalizedKey = "Up";
+            movementKeyPressed = true;
+        }
+        else if (keyStr.Contains("CursorDown"))
+        {
+            normalizedKey = "Down";
+            movementKeyPressed = true;
+        }
+        else if (keyStr.Contains("CursorLeft"))
+        {
+            normalizedKey = "Left";
+            movementKeyPressed = true;
+        }
+        else if (keyStr.Contains("CursorRight"))
+        {
+            normalizedKey = "Right";
+            movementKeyPressed = true;
+        }
+        else
+        {
+            // Check for numeric keypad keys (1-9)
+            char firstChar = keyStr.Length > 0 ? keyStr[0] : '\0';
+            if (firstChar >= '1' && firstChar <= '9')
+            {
+                normalizedKey = firstChar.ToString();
                 movementKeyPressed = true;
-                break;
+            }
         }
         
-        // If a movement key was just pressed, immediately process movement
-        // This provides instant response when changing directions
-        if (movementKeyPressed && !_introScreen.IsActive && !_introScreen.IsClearingScreen && 
-            !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
+        if (movementKeyPressed && normalizedKey != null)
         {
-            // Process movement immediately for instant response
-            if (ProcessPlayerMovement())
+            // Update key state - mark this key as currently pressed with current time
+            _pressedKeys[normalizedKey] = DateTime.Now;
+            
+            // If a movement key was just pressed, immediately process movement
+            // This provides instant response when changing directions
+            if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && 
+                !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                // Player moved - redraw to show the movement immediately
-                if (Application.Driver != null)
+                // Process movement immediately for instant response
+                if (ProcessPlayerMovement())
                 {
+                    // Player moved - redraw to show the movement immediately
                     DrawMapAndPlayer();
                 }
             }
+            
+            // Movement key handled - don't process as bullet firing key
+            return;
         }
 
         // Handle bullet firing (q, w, e, a, d, z, x, c)
@@ -406,56 +421,68 @@ public class Game : Window
             double startY = 0;
             double velX = 0;
             double velY = 0;
+            bool shouldFire = false;
 
-            switch (e.KeyCode)
+            // Extract the character from the key string
+            char keyChar = keyStr.Length > 0 ? char.ToUpper(keyStr[0]) : '\0';
+            
+            switch (keyChar)
             {
-                case KeyCode.Q: // Diagonal left/up - fire from top-left corner
+                case 'Q': // Diagonal left/up - fire from top-left corner
                     startX = _player.X;
                     startY = _player.Y;
                     velX = -BulletSpeed;
                     velY = -BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.W: // Up - fire from top center
+                case 'W': // Up - fire from top center
                     startX = _player.X + 0.5;
                     startY = _player.Y;
                     velY = -BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.E: // Diagonal right/up - fire from top-right corner
+                case 'E': // Diagonal right/up - fire from top-right corner
                     startX = _player.X + 1.0;
                     startY = _player.Y;
                     velX = BulletSpeed;
                     velY = -BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.A: // Left - fire from left center
+                case 'A': // Left - fire from left center
                     startX = _player.X;
                     startY = _player.Y + 1.0;
                     velX = -BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.D: // Right - fire from right center
+                case 'D': // Right - fire from right center
                     startX = _player.X + 1.0;
                     startY = _player.Y + 1.0;
                     velX = BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.Z: // Diagonal left/down - fire from bottom-left corner
+                case 'Z': // Diagonal left/down - fire from bottom-left corner
                     startX = _player.X;
                     startY = _player.Y + 2.0;
                     velX = -BulletSpeed;
                     velY = BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.X: // Down - fire from bottom center
+                case 'X': // Down - fire from bottom center
                     startX = _player.X + 0.5;
                     startY = _player.Y + 2.0;
                     velY = BulletSpeed;
+                    shouldFire = true;
                     break;
-                case KeyCode.C: // Diagonal right/down - fire from bottom-right corner
+                case 'C': // Diagonal right/down - fire from bottom-right corner
                     startX = _player.X + 1.0;
                     startY = _player.Y + 2.0;
                     velX = BulletSpeed;
                     velY = BulletSpeed;
+                    shouldFire = true;
                     break;
             }
 
-            if (velX != 0 || velY != 0)
+            if (shouldFire && (velX != 0 || velY != 0))
             {
                 string? playerId = _gameSession?.PlayerId;
                 var bullet = new Bullet(startX, startY, velX, velY, playerId: playerId);
@@ -478,13 +505,13 @@ public class Game : Window
 
     private bool ProcessPlayerMovement()
     {
-        if (Application.Driver == null || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
+        if (!IsInitialized || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
             return false;
 
         // Clean up old key presses (keys not seen recently are considered released)
         // Use a more aggressive cleanup to detect key releases faster
         DateTime now = DateTime.Now;
-        var keysToRemove = new List<KeyCode>();
+        var keysToRemove = new List<string>();
         foreach (var kvp in _pressedKeys)
         {
             // Remove keys that haven't been refreshed recently
@@ -506,8 +533,8 @@ public class Game : Window
         if (_pressedKeys.Count == 0)
             return false;
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = currentWidth;
         int frameHeight = currentHeight;
 
@@ -581,16 +608,16 @@ public class Game : Window
         int deltaY = 0;
 
         // Check for cardinal directions (arrow keys and keypad)
-        bool upPressed = _pressedKeys.ContainsKey(KeyCode.CursorUp) || _pressedKeys.ContainsKey(KeyCode.D8);
-        bool downPressed = _pressedKeys.ContainsKey(KeyCode.CursorDown) || _pressedKeys.ContainsKey(KeyCode.D2);
-        bool leftPressed = _pressedKeys.ContainsKey(KeyCode.CursorLeft) || _pressedKeys.ContainsKey(KeyCode.D4);
-        bool rightPressed = _pressedKeys.ContainsKey(KeyCode.CursorRight) || _pressedKeys.ContainsKey(KeyCode.D6);
+        bool upPressed = _pressedKeys.ContainsKey("Up") || _pressedKeys.ContainsKey("8");
+        bool downPressed = _pressedKeys.ContainsKey("Down") || _pressedKeys.ContainsKey("2");
+        bool leftPressed = _pressedKeys.ContainsKey("Left") || _pressedKeys.ContainsKey("4");
+        bool rightPressed = _pressedKeys.ContainsKey("Right") || _pressedKeys.ContainsKey("6");
 
         // Check for diagonal keypad keys
-        bool upLeftPressed = _pressedKeys.ContainsKey(KeyCode.D7);
-        bool upRightPressed = _pressedKeys.ContainsKey(KeyCode.D9);
-        bool downLeftPressed = _pressedKeys.ContainsKey(KeyCode.D1);
-        bool downRightPressed = _pressedKeys.ContainsKey(KeyCode.D3);
+        bool upLeftPressed = _pressedKeys.ContainsKey("7");
+        bool upRightPressed = _pressedKeys.ContainsKey("9");
+        bool downLeftPressed = _pressedKeys.ContainsKey("1");
+        bool downRightPressed = _pressedKeys.ContainsKey("3");
 
         // Handle diagonal keypad keys (they take priority)
         if (upLeftPressed)
@@ -662,11 +689,10 @@ public class Game : Window
 
     private void DrawMapAndPlayer()
     {
-        if (Application.Driver == null)
-            return;
+        
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
 
         // Ensure we have valid dimensions (need at least status bar + some map)
         if (currentWidth < 3 || currentHeight < StatusBarHeight + 3)
@@ -682,14 +708,14 @@ public class Game : Window
         _lastFrameHeight = frameHeight;
         
         // If dimensions changed, clear the entire game area first (especially important if window got smaller)
-        if (dimensionsChanged && Application.Driver != null)
+        if (dimensionsChanged)
         {
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Black, Color.Black));
+            SetAttribute(new DrawingAttribute(Color.Black, Color.Black));
             // Clear from status bar to bottom of screen
             for (int r = StatusBarHeight; r < currentHeight; r++)
             {
-                Application.Driver.Move(0, r);
-                Application.Driver.AddStr(new string(' ', currentWidth));
+                Move(0, r);
+                this.AddString(new string(' ', currentWidth));
             }
         }
 
@@ -701,13 +727,13 @@ public class Game : Window
         // Draw status bar first
         DrawStatusBar();
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
 
         // draw the maze - start at row StatusBarHeight (after status bar)
         for (int r = 0; r < frameHeight; r++)
         {
-            Application.Driver.Move(0, r + StatusBarHeight);
-            Application.Driver.AddStr(map[r]);
+            Move(0, r + StatusBarHeight);
+            this.AddString(map[r]);
         }
 
         DrawPlayer();
@@ -769,14 +795,14 @@ public class Game : Window
         // Clear previous player position before drawing new position
         if (_previousPlayerViewportX >= 0 && _previousPlayerViewportY >= 0 && _cachedMapViewport != null)
         {
-            int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
-            int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
+            int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Frame.Width;
+            int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Frame.Height - StatusBarHeight);
 
             if (_previousPlayerViewportX < frameWidth && _previousPlayerViewportY < frameHeight &&
                 _previousPlayerViewportY >= 0 && _previousPlayerViewportY < _cachedMapViewport.Length &&
                 _previousPlayerViewportX >= 0 && _previousPlayerViewportX < _cachedMapViewport[_previousPlayerViewportY].Length)
             {
-                Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
                 // Clear all 6 cells of player (2x3)
                 for (int row = 0; row < 3; row++)
                 {
@@ -789,8 +815,8 @@ public class Game : Window
                             clearX >= 0 && clearX < _cachedMapViewport[clearY].Length)
                         {
                             char mapChar = _cachedMapViewport[clearY][clearX];
-                            Application.Driver.Move(clearX, clearY + StatusBarHeight);
-                            Application.Driver.AddRune(mapChar);
+                            Move(clearX, clearY + StatusBarHeight);
+                            AddRune(mapChar);
                         }
                     }
                 }
@@ -801,16 +827,16 @@ public class Game : Window
         DrawPlayer();
 
         // Update previous viewport position
-        int frameWidth2 = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
-        int frameHeight2 = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
+        int frameWidth2 = _lastFrameWidth != 0 ? _lastFrameWidth : Frame.Width;
+        int frameHeight2 = _lastFrameHeight != 0 ? _lastFrameHeight : (Frame.Height - StatusBarHeight);
         _previousPlayerViewportX = frameWidth2 / 2;
         _previousPlayerViewportY = frameHeight2 / 2;
     }
 
     private void UpdateBullets()
     {
-        int currentWidth = Application.Driver!.Cols;
-        int currentHeight = Application.Driver!.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
@@ -834,10 +860,10 @@ public class Game : Window
                     map != null && viewportY >= 0 && viewportY < map.Length &&
                     viewportX >= 0 && viewportX < map[viewportY].Length)
                 {
-                    Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddRune(map[viewportY][viewportX]);
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                    SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    AddRune(map[viewportY][viewportX]);
+                    SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                 }
 
                 // Publish bullet expired in multiplayer
@@ -961,10 +987,10 @@ public class Game : Window
                         freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                         viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                     {
-                        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                        Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(freshMap[viewportY][viewportX]);
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                        Move(viewportX, viewportY + StatusBarHeight);
+                        AddRune(freshMap[viewportY][viewportX]);
+                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                     }
 
                     // Also clear bullet's previous position if different
@@ -982,10 +1008,10 @@ public class Game : Window
                             freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                             prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
                         {
-                            Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                            Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                            Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                            Move(prevViewportX, prevViewportY + StatusBarHeight);
+                            AddRune(freshMap[prevViewportY][prevViewportX]);
+                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                         }
                     }
 
@@ -1031,10 +1057,10 @@ public class Game : Window
                         freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                         viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                     {
-                        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                        Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(freshMap[viewportY][viewportX]);
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                        Move(viewportX, viewportY + StatusBarHeight);
+                        AddRune(freshMap[viewportY][viewportX]);
+                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                     }
 
                     // Also clear bullet's previous position if different
@@ -1052,10 +1078,10 @@ public class Game : Window
                             freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                             prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
                         {
-                            Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                            Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                            Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                            Move(prevViewportX, prevViewportY + StatusBarHeight);
+                            AddRune(freshMap[prevViewportY][prevViewportX]);
+                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                         }
                     }
 
@@ -1124,10 +1150,10 @@ public class Game : Window
                             freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                             viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                         {
-                            Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                            Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                            Application.Driver.AddRune(freshMap[viewportY][viewportX]);
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                            Move(viewportX, viewportY + StatusBarHeight);
+                            AddRune(freshMap[viewportY][viewportX]);
+                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                         }
 
                         // Also clear bullet's previous position if different
@@ -1145,10 +1171,10 @@ public class Game : Window
                                 freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                                 prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
                             {
-                                Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                                Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                                Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
-                                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                                SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                                Move(prevViewportX, prevViewportY + StatusBarHeight);
+                                AddRune(freshMap[prevViewportY][prevViewportX]);
+                                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                             }
                         }
 
@@ -1245,10 +1271,10 @@ public class Game : Window
                     freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                     viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                 {
-                    Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddRune(freshMap[viewportY][viewportX]);
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                    SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    AddRune(freshMap[viewportY][viewportX]);
+                    SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                 }
                 
                 // Also clear bullet's previous position if different
@@ -1266,10 +1292,10 @@ public class Game : Window
                         freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                         prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
                     {
-                        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                        Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                        Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                        Move(prevViewportX, prevViewportY + StatusBarHeight);
+                        AddRune(freshMap[prevViewportY][prevViewportX]);
+                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                     }
                 }
                 
@@ -1287,7 +1313,6 @@ public class Game : Window
                     // Local player hit - handle respawn
                     _player.Lives = networkPlayer.Lives;
                     _player.IsAlive = networkPlayer.IsAlive;
-                    _cachedLives = -1; // Force status bar update
                     
                     if (_player.Lives > 0)
                     {
@@ -1328,11 +1353,10 @@ public class Game : Window
 
     private void DrawBullets()
     {
-        if (Application.Driver == null)
-            return;
+        
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
@@ -1352,7 +1376,7 @@ public class Game : Window
         int mapOffsetY = _player.Y - (frameHeight / 2);
 
         // First, clear previous bullet positions by drawing the map character there
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
         foreach (var bullet in _bullets)
         {
             // Convert previous world coordinates to viewport coordinates
@@ -1374,8 +1398,8 @@ public class Game : Window
                         prevViewportX >= 0 && prevViewportX < map[prevViewportY].Length)
                     {
                         char mapChar = map[prevViewportY][prevViewportX];
-                        Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                        Application.Driver.AddRune(mapChar);
+                        Move(prevViewportX, prevViewportY + StatusBarHeight);
+                        AddRune(mapChar);
                     }
                 }
             }
@@ -1390,7 +1414,7 @@ public class Game : Window
         // Flash between bright red and red based on time
         bool isBright = (_cachedDateTime.Millisecond / 250) % 2 == 0;
         var bulletColor = isBright ? Color.BrightRed : Color.Red;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(bulletColor, Color.Black));
+        SetAttribute(new DrawingAttribute(bulletColor, Color.Black));
 
         // Now draw bullets at their current positions
         foreach (var bullet in _bullets)
@@ -1403,21 +1427,20 @@ public class Game : Window
             if (viewportX >= 0 && viewportX < frameWidth &&
                 viewportY >= 0 && viewportY < frameHeight)
             {
-                Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                Application.Driver.AddRune('*');
+                Move(viewportX, viewportY + StatusBarHeight);
+                AddRune('*');
             }
         }
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
     }
 
     private void DrawHives()
     {
-        if (Application.Driver == null)
-            return;
+        
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
@@ -1448,7 +1471,7 @@ public class Game : Window
             // Flash between cyan and green based on time
             bool isCyan = (totalMs / hive.FlashIntervalMs) % 2 == 0;
             var hiveColor = isCyan ? Color.Cyan : Color.Green;
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(hiveColor, Color.Black));
+            SetAttribute(new DrawingAttribute(hiveColor, Color.Black));
 
             // Calculate viewport coordinates for the hive
             // The viewport is centered on the player at (frameWidth/2, frameHeight/2)
@@ -1488,8 +1511,8 @@ public class Game : Window
             if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
                 hiveViewportY >= 0 && hiveViewportY < frameHeight)
             {
-                Application.Driver.Move(hiveViewportX, hiveViewportY + StatusBarHeight);
-                Application.Driver.AddRune('╔');
+                Move(hiveViewportX, hiveViewportY + StatusBarHeight);
+                AddRune('╔');
             }
 
             // Top-right corner
@@ -1497,8 +1520,8 @@ public class Game : Window
             if (topRightX >= 0 && topRightX < frameWidth &&
                 hiveViewportY >= 0 && hiveViewportY < frameHeight)
             {
-                Application.Driver.Move(topRightX, hiveViewportY + StatusBarHeight);
-                Application.Driver.AddRune('╗');
+                Move(topRightX, hiveViewportY + StatusBarHeight);
+                AddRune('╗');
             }
 
             // Bottom-left corner
@@ -1506,20 +1529,20 @@ public class Game : Window
             if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
                 bottomLeftY >= 0 && bottomLeftY < frameHeight)
             {
-                Application.Driver.Move(hiveViewportX, bottomLeftY + StatusBarHeight);
-                Application.Driver.AddRune('╚');
+                Move(hiveViewportX, bottomLeftY + StatusBarHeight);
+                AddRune('╚');
             }
 
             // Bottom-right corner
             if (topRightX >= 0 && topRightX < frameWidth &&
                 bottomLeftY >= 0 && bottomLeftY < frameHeight)
             {
-                Application.Driver.Move(topRightX, bottomLeftY + StatusBarHeight);
-                Application.Driver.AddRune('╝');
+                Move(topRightX, bottomLeftY + StatusBarHeight);
+                AddRune('╝');
             }
         }
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
     }
 
     private void SpawnSnipes()
@@ -1902,8 +1925,8 @@ public class Game : Window
                     snipe.IsAlive = false;
 
                     // Get fresh map to ensure we have correct character for clearing
-                    int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Application.Driver!.Cols;
-                    int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Application.Driver!.Rows - StatusBarHeight);
+                    int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Frame.Width;
+                    int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Frame.Height - StatusBarHeight);
                     var bulletMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
                     int mapOffsetX = _player.X - (frameWidth / 2);
                     int mapOffsetY = _player.Y - (frameHeight / 2);
@@ -1914,10 +1937,10 @@ public class Game : Window
                         bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
                         viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
                     {
-                        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                        Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(bulletMap[viewportY][viewportX]);
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                        Move(viewportX, viewportY + StatusBarHeight);
+                        AddRune(bulletMap[viewportY][viewportX]);
+                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                     }
 
                     // Clear snipe first (both '@' and arrow) - uses world coordinates
@@ -1929,10 +1952,10 @@ public class Game : Window
                         bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
                         viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
                     {
-                        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                        Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(bulletMap[viewportY][viewportX]);
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                        Move(viewportX, viewportY + StatusBarHeight);
+                        AddRune(bulletMap[viewportY][viewportX]);
+                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                     }
 
                     // Also clear bullet's previous position if different
@@ -1950,10 +1973,10 @@ public class Game : Window
                             bulletMap != null && prevViewportY >= 0 && prevViewportY < bulletMap.Length &&
                             prevViewportX >= 0 && prevViewportX < bulletMap[prevViewportY].Length)
                         {
-                            Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                            Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                            Application.Driver.AddRune(bulletMap[prevViewportY][prevViewportX]);
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                            Move(prevViewportX, prevViewportY + StatusBarHeight);
+                            AddRune(bulletMap[prevViewportY][prevViewportX]);
+                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                         }
                     }
 
@@ -1992,9 +2015,6 @@ public class Game : Window
                 snipe.IsAlive = false;
                 _player.Lives--;
                 
-                // Invalidate cached lives to ensure status bar updates
-                _cachedLives = -1;
-
                 if (_player.Lives > 0)
                 {
                     // Respawn player at random position with clearing effect
@@ -2030,11 +2050,10 @@ public class Game : Window
 
     private void DrawSnipes()
     {
-        if (Application.Driver == null)
-            return;
+        
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
@@ -2113,7 +2132,7 @@ public class Game : Window
         }
 
         // Step 3: Clear all positions that remain in positionsToClear (no longer occupied)
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
         foreach (var (worldX, worldY) in positionsToClear)
         {
             // Calculate viewport coordinates
@@ -2140,8 +2159,8 @@ public class Game : Window
                 worldX >= 0 && worldX < _map.MapWidth)
             {
                 char mapChar = _map.FullMap[worldY][worldX];
-                Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                Application.Driver.AddRune(mapChar);
+                Move(viewportX, viewportY + StatusBarHeight);
+                AddRune(mapChar);
             }
         }
 
@@ -2175,7 +2194,7 @@ public class Game : Window
             {
                 // Set color based on snipe type: 'A' = magenta, 'B' = green
                 var snipeColor = snipe.Type == 'A' ? Color.Magenta : Color.Green;
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(snipeColor, Color.Black));
+                SetAttribute(new DrawingAttribute(snipeColor, Color.Black));
 
                 // Draw order depends on direction:
                 // Moving left: arrow first, then character
@@ -2183,31 +2202,31 @@ public class Game : Window
                 if (snipe.DirectionX < 0)
                 {
                     // Moving left - draw arrow first, then character
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddRune(snipe.GetDirectionArrow());
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    AddRune(snipe.GetDirectionArrow());
 
                     if (viewportX + 1 < frameWidth)
                     {
-                        Application.Driver.Move(viewportX + 1, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(snipe.GetDisplayChar());
+                        Move(viewportX + 1, viewportY + StatusBarHeight);
+                        AddRune(snipe.GetDisplayChar());
                     }
                 }
                 else
                 {
                     // Moving right or other directions - draw character first, then arrow
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddRune(snipe.GetDisplayChar());
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    AddRune(snipe.GetDisplayChar());
 
                     if (viewportX + 1 < frameWidth)
                     {
-                        Application.Driver.Move(viewportX + 1, viewportY + StatusBarHeight);
-                        Application.Driver.AddRune(snipe.GetDirectionArrow());
+                        Move(viewportX + 1, viewportY + StatusBarHeight);
+                        AddRune(snipe.GetDirectionArrow());
                     }
                 }
             }
         }
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
 
         // CRITICAL: Update PreviousX/PreviousY to match what was actually drawn
         // This ensures that on the next frame, we clear the correct positions
@@ -2230,8 +2249,8 @@ public class Game : Window
         if (_map == null)
             return ' ';
 
-        int frameWidth = Application.Driver?.Cols ?? 80;
-        int frameHeight = (Application.Driver?.Rows ?? 24) - StatusBarHeight;
+        int frameWidth = Frame.Width;
+        int frameHeight = Frame.Height - StatusBarHeight;
 
         // Get map viewport
         var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
@@ -2246,19 +2265,19 @@ public class Game : Window
 
     private void DrawMapAndPlayerAtPosition(int x, int y)
     {
-        if (Application.Driver == null || _map == null)
+        if (false || _map == null)
             return;
 
         // Calculate which part of the map should be at this position
-        int frameWidth = Application.Driver.Cols;
-        int frameHeight = Application.Driver.Rows - StatusBarHeight;
+        int frameWidth = Frame.Width;
+        int frameHeight = Frame.Height - StatusBarHeight;
 
         if (y < StatusBarHeight)
         {
             // Status bar area - just draw a space (status bar will be drawn separately)
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-            Application.Driver.Move(x, y);
-            Application.Driver.AddRune(' ');
+            SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+            Move(x, y);
+            AddRune(' ');
             return;
         }
 
@@ -2283,44 +2302,43 @@ public class Game : Window
         // Draw map character
         if (mapY >= 0 && mapY < frameHeight && x >= 0 && x < frameWidth && map != null && mapY < map.Length && x < map[mapY].Length)
         {
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-            Application.Driver.Move(x, y);
-            Application.Driver.AddRune(map[mapY][x]);
+            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+            Move(x, y);
+            AddRune(map[mapY][x]);
         }
     }
 
     private void DrawPlayerAtPosition(int x, int y, int playerTopLeftX, int playerTopLeftY)
     {
-        if (Application.Driver == null)
-            return;
+        
 
         int relX = x - playerTopLeftX;
         int relY = y - playerTopLeftY;
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.BrightYellow, Color.Black));
-        Application.Driver.Move(x, y);
+        SetAttribute(new DrawingAttribute(Color.BrightYellow, Color.Black));
+        Move(x, y);
 
         // Player is 2x3: "BD" on first row, "BD" on second row, "BD" on third row
         if (relX == 0 && relY == 0)
-            Application.Driver.AddRune('B');
+            AddRune('B');
         else if (relX == 1 && relY == 0)
-            Application.Driver.AddRune('D');
+            AddRune('D');
         else if (relX == 0 && relY == 1)
-            Application.Driver.AddRune('B');
+            AddRune('B');
         else if (relX == 1 && relY == 1)
-            Application.Driver.AddRune('D');
+            AddRune('D');
         else if (relX == 0 && relY == 2)
-            Application.Driver.AddRune('B');
+            AddRune('B');
         else if (relX == 1 && relY == 2)
-            Application.Driver.AddRune('D');
+            AddRune('D');
     }
 
     private void ClearSnipePosition(Snipe snipe)
     {
-        if (Application.Driver == null) return;
+        
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
@@ -2345,7 +2363,7 @@ public class Game : Window
         if (viewportX >= 0 && viewportX < frameWidth &&
             viewportY >= 0 && viewportY < frameHeight)
         {
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
 
             // Clear '@' character and arrow based on direction
             // When moving left (DirectionX < 0): arrow is at viewportX, '@' is at viewportX + 1
@@ -2371,8 +2389,8 @@ public class Game : Window
             {
                 char mapChar = _map.FullMap[(snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight]
                     [(snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth];
-                Application.Driver.Move(charViewportX, viewportY + StatusBarHeight);
-                Application.Driver.AddRune(mapChar);
+                Move(charViewportX, viewportY + StatusBarHeight);
+                AddRune(mapChar);
             }
 
             // Clear arrow position if within viewport
@@ -2390,21 +2408,21 @@ public class Game : Window
                     arrowWorldX >= 0 && arrowWorldX < _map.MapWidth)
                 {
                     char arrowMapChar = _map.FullMap[arrowWorldY][arrowWorldX];
-                    Application.Driver.Move(arrowViewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddRune(arrowMapChar);
+                    Move(arrowViewportX, viewportY + StatusBarHeight);
+                    AddRune(arrowMapChar);
                 }
             }
 
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         }
     }
 
     private void ClearHivePosition(Hive hive)
     {
-        if (Application.Driver == null) return;
+        
 
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
 
@@ -2427,7 +2445,7 @@ public class Game : Window
         int hiveViewportY = (frameHeight / 2) + deltaY;
 
         // Clear all 4 corners of the 2x2 hive
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
 
         // Top-left corner
         if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
@@ -2436,8 +2454,8 @@ public class Game : Window
             int worldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int worldY = (hive.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
             char mapChar = _map.FullMap[worldY][worldX];
-            Application.Driver.Move(hiveViewportX, hiveViewportY + StatusBarHeight);
-            Application.Driver.AddRune(mapChar);
+            Move(hiveViewportX, hiveViewportY + StatusBarHeight);
+            AddRune(mapChar);
         }
 
         // Top-right corner
@@ -2448,8 +2466,8 @@ public class Game : Window
             int worldX = ((hive.X + 1) % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int worldY = (hive.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
             char mapChar = _map.FullMap[worldY][worldX];
-            Application.Driver.Move(topRightX, hiveViewportY + StatusBarHeight);
-            Application.Driver.AddRune(mapChar);
+            Move(topRightX, hiveViewportY + StatusBarHeight);
+            AddRune(mapChar);
         }
 
         // Bottom-left corner
@@ -2460,8 +2478,8 @@ public class Game : Window
             int worldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int worldY = ((hive.Y + 1) % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
             char mapChar = _map.FullMap[worldY][worldX];
-            Application.Driver.Move(hiveViewportX, bottomLeftY + StatusBarHeight);
-            Application.Driver.AddRune(mapChar);
+            Move(hiveViewportX, bottomLeftY + StatusBarHeight);
+            AddRune(mapChar);
         }
 
         // Bottom-right corner
@@ -2471,11 +2489,11 @@ public class Game : Window
             int worldX = ((hive.X + 1) % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
             int worldY = ((hive.Y + 1) % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
             char mapChar = _map.FullMap[worldY][worldX];
-            Application.Driver.Move(topRightX, bottomLeftY + StatusBarHeight);
-            Application.Driver.AddRune(mapChar);
+            Move(topRightX, bottomLeftY + StatusBarHeight);
+            AddRune(mapChar);
         }
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
     }
 
     private (int x, int y) FindRandomValidPosition()
@@ -2602,13 +2620,6 @@ public class Game : Window
         // Reset cached values
         _cachedMapViewport = null;
         _cachedDateTime = DateTime.MinValue;
-        _cachedHivesUndestroyed = -1;
-        _cachedSnipesUndestroyed = -1;
-        _cachedLives = -1;
-        _cachedLevel = -1;
-        _cachedScore = -1;
-        _previousPlayerCellX = -1;
-        _previousPlayerCellY = -1;
         _previousPlayerViewportX = -1;
         _previousPlayerViewportY = -1;
     }
@@ -2747,7 +2758,7 @@ public class Game : Window
             if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _grpcClient != null)
             {
                 // Small delay to ensure subscriptions are active
-                Application.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+                _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(100), () =>
                 {
                     PublishGameStateSnapshot();
                     return false; // One-time
@@ -2763,11 +2774,6 @@ public class Game : Window
         // Reset cached values
         _cachedMapViewport = null;
         _cachedDateTime = DateTime.MinValue;
-        _cachedHivesUndestroyed = -1;
-        _cachedSnipesUndestroyed = -1;
-        _cachedLevel = -1;
-        _previousPlayerCellX = -1;
-        _previousPlayerCellY = -1;
         _previousPlayerViewportX = -1;
         _previousPlayerViewportY = -1;
     }
@@ -2849,82 +2855,72 @@ public class Game : Window
 
     private void DrawStatusBar()
     {
-        if (Application.Driver == null)
-            return;
-
-        // Performance optimization: Only redraw if values changed
+        // In Terminal.Gui v2, OnDrawingContent clears the view each time,
+        // so we must redraw the status bar every frame (no caching optimization)
         int currentFPS = (int)Math.Round(_currentFPS);
-        if (_cachedHivesUndestroyed == _gameState.HivesUndestroyed &&
-            _cachedSnipesUndestroyed == _gameState.SnipesUndestroyed &&
-            _cachedLives == _player.Lives &&
-            _cachedLevel == _gameState.Level &&
-            _cachedScore == _gameState.Score &&
-            _cachedFPS == currentFPS)
-        {
-            return; // No changes, skip redraw
-        }
-
-        int currentWidth = Application.Driver.Cols;
+        
+        int currentWidth = Frame.Width;
 
         // Set status bar color: white text on blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
 
         // Draw status bar with hive shapes
-        Application.Driver.Move(0, 0);
+        Move(0, 0);
 
         // Draw hive indicator (small box shape) with fixed color (cyan - first hive color)
         // Using fixed color to reduce status bar updates
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
-        Application.Driver.AddStr("╔╗"); // Top corners of hive
+        SetAttribute(new DrawingAttribute(Color.Cyan, Color.Blue));
+        this.AddString("╔╗"); // Top corners of hive
 
         // Reset to status bar color and position
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.AddStr($" {_gameState.HivesUndestroyed}/{_gameState.TotalHives}  ");
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        string hivesText = $" {_gameState.HivesUndestroyed}/{_gameState.TotalHives}  ";
+        this.AddString(hivesText);
 
         // Draw snipes count
-        Application.Driver.AddStr($"Snipes: {_gameState.SnipesUndestroyed}/{_gameState.TotalSnipes}  ");
+        string snipesText = $"Snipes: {_gameState.SnipesUndestroyed}/{_gameState.TotalSnipes}  ";
+        this.AddString(snipesText);
 
         // Draw lives
-        Application.Driver.AddStr($"Lives: {_player.Lives}  ");
+        string livesText = $"Lives: {_player.Lives}  ";
+        this.AddString(livesText);
 
         // Draw level
-        Application.Driver.AddStr($"Level: {_gameState.Level}  ");
+        string levelText = $"Level: {_gameState.Level}  ";
+        this.AddString(levelText);
 
         // Draw score
-        Application.Driver.AddStr($"Score: {_gameState.Score}  ");
+        string scoreText = $"Score: {_gameState.Score}  ";
+        this.AddString(scoreText);
 
         // Draw FPS (currentFPS already calculated at top of method)
-        Application.Driver.AddStr($"FPS: {currentFPS}");
+        string fpsText = $"FPS: {currentFPS}";
+        this.AddString(fpsText);
 
+        // Calculate current cursor position
+        int currentPos = 2 + hivesText.Length + snipesText.Length + livesText.Length + 
+                        levelText.Length + scoreText.Length + fpsText.Length;
+        
         // Clear rest of first row
-        int currentPos = Application.Driver.Col;
         if (currentPos < currentWidth)
         {
-            Application.Driver.AddStr(new string(' ', currentWidth - currentPos));
+            this.AddString(new string(' ', currentWidth - currentPos));
         }
 
         // Draw second row with bottom of hive
-        Application.Driver.Move(0, 1);
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
-        Application.Driver.AddStr("╚╝");
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.AddStr(new string(' ', currentWidth - 2));
+        Move(0, 1);
+        SetAttribute(new DrawingAttribute(Color.Cyan, Color.Blue));
+        this.AddString("╚╝");
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        this.AddString(new string(' ', currentWidth - 2));
 
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-
-        // Cache current values
-        _cachedHivesUndestroyed = _gameState.HivesUndestroyed;
-        _cachedSnipesUndestroyed = _gameState.SnipesUndestroyed;
-        _cachedLives = _player.Lives;
-        _cachedLevel = _gameState.Level;
-        _cachedScore = _gameState.Score;
-        _cachedFPS = currentFPS;
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
     }
 
     private void DrawPlayer()
     {
-        int currentWidth = Application.Driver!.Cols;
-        int currentHeight = Application.Driver!.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
 
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
@@ -2946,23 +2942,23 @@ public class Game : Window
         var eyes = _cachedDateTime.Millisecond < 500 ? "ÔÔ" : "OO";
         var mouth = _cachedDateTime.Millisecond < 500 ? "◄►" : "◂▸";
 
-        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-        Application.Driver!.Move(topLeftCol, topLeftRow);
-        Application.Driver!.AddStr(eyes);
-        Application.Driver!.Move(topLeftCol, topLeftRow + 1);
-        Application.Driver!.AddStr(mouth);
-        Application.Driver!.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
-        Application.Driver!.Move(topLeftCol, topLeftRow + 2);
-        Application.Driver!.AddStr(_player.Initials);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+        Move(topLeftCol, topLeftRow);
+        AddStr(eyes);
+        Move(topLeftCol, topLeftRow + 1);
+        AddStr(mouth);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+        Move(topLeftCol, topLeftRow + 2);
+        AddStr(_player.Initials);
     }
     
     private void DrawRemotePlayers()
     {
-        if (!_isMultiplayer || _gameSession == null || Application.Driver == null)
+        if (!_isMultiplayer || _gameSession == null || false)
             return;
         
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
         
@@ -2991,29 +2987,29 @@ public class Game : Window
                 viewportY + 3 > 0 && viewportY < frameHeight)
             {
                 // Draw remote player (different color to distinguish from local)
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Black));
+                SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
                 
                 // Draw eyes (same as local player but different color)
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY >= 0 && viewportY < frameHeight)
                 {
                     var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddStr(eyes);
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    this.AddString(eyes);
                 }
                 
                 // Draw mouth
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY + 1 >= 0 && viewportY + 1 < frameHeight)
                 {
                     var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
-                    Application.Driver.Move(viewportX, viewportY + 1 + StatusBarHeight);
-                    Application.Driver.AddStr(mouth);
+                    Move(viewportX, viewportY + 1 + StatusBarHeight);
+                    this.AddString(mouth);
                 }
                 
                 // Draw initials
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY + 2 >= 0 && viewportY + 2 < frameHeight)
                 {
-                    Application.Driver.Move(viewportX, viewportY + 2 + StatusBarHeight);
-                    Application.Driver.AddStr(networkPlayer.Initials);
+                    Move(viewportX, viewportY + 2 + StatusBarHeight);
+                    this.AddString(networkPlayer.Initials);
                 }
                 
                 // Track where we drew this player (viewport coordinates)
@@ -3028,16 +3024,16 @@ public class Game : Window
             }
         }
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
     }
     
     private void DrawRemotePlayersWithClearing()
     {
-        if (!_isMultiplayer || _gameSession == null || Application.Driver == null)
+        if (!_isMultiplayer || _gameSession == null || false)
             return;
         
-        int currentWidth = Application.Driver.Cols;
-        int currentHeight = Application.Driver.Rows;
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
         
@@ -3090,7 +3086,7 @@ public class Game : Window
                     prevViewportY + 3 > 0 && prevViewportY < frameHeight &&
                     map != null)
                 {
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
+                    SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
                     for (int row = 0; row < 3; row++)
                     {
                         for (int col = 0; col < 2; col++)
@@ -3103,8 +3099,8 @@ public class Game : Window
                                 clearX < map[clearY].Length)
                             {
                                 char mapChar = map[clearY][clearX];
-                                Application.Driver.Move(clearX, clearY + StatusBarHeight);
-                                Application.Driver.AddRune(mapChar);
+                                Move(clearX, clearY + StatusBarHeight);
+                                AddRune(mapChar);
                             }
                         }
                     }
@@ -3120,29 +3116,29 @@ public class Game : Window
                 viewportY + 3 > 0 && viewportY < frameHeight)
             {
                 // Draw remote player (different color to distinguish from local)
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Black));
+                SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
                 
                 // Draw eyes (same as local player but different color)
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY >= 0 && viewportY < frameHeight)
                 {
                     var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddStr(eyes);
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    this.AddString(eyes);
                 }
                 
                 // Draw mouth
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY + 1 >= 0 && viewportY + 1 < frameHeight)
                 {
                     var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
-                    Application.Driver.Move(viewportX, viewportY + 1 + StatusBarHeight);
-                    Application.Driver.AddStr(mouth);
+                    Move(viewportX, viewportY + 1 + StatusBarHeight);
+                    this.AddString(mouth);
                 }
                 
                 // Draw initials
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY + 2 >= 0 && viewportY + 2 < frameHeight)
                 {
-                    Application.Driver.Move(viewportX, viewportY + 2 + StatusBarHeight);
-                    Application.Driver.AddStr(networkPlayer.Initials);
+                    Move(viewportX, viewportY + 2 + StatusBarHeight);
+                    this.AddString(networkPlayer.Initials);
                 }
                 
                 // Track where we drew this player (viewport coordinates) for proper clearing next frame
@@ -3157,7 +3153,7 @@ public class Game : Window
             }
         }
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
     }
     
     private async Task StartMultiplayerGame(int maxPlayers)
@@ -3279,7 +3275,7 @@ public class Game : Window
             _introScreen.ShowWaitingForPlayers(_gameSession.GameId, maxPlayers, isHost: true);
             
             // Start timer to publish player count updates
-            Application.AddTimeout(TimeSpan.FromSeconds(1), () =>
+            _app.TimedEvents?.Add(TimeSpan.FromSeconds(1), () =>
             {
                 if (_gameSession != null && _gameSession.Status == GameSessionStatus.WaitingForPlayers)
                 {
@@ -3290,7 +3286,7 @@ public class Game : Window
             });
             
             // Start timer to check if we should start game (60 seconds or max players)
-            Application.AddTimeout(TimeSpan.FromSeconds(60), () =>
+            _app.TimedEvents?.Add(TimeSpan.FromSeconds(60), () =>
             {
                 if (_gameSession != null && _gameSession.Status == GameSessionStatus.WaitingForPlayers)
                 {
@@ -3419,7 +3415,7 @@ public class Game : Window
                 {
                     // Send game state snapshot to the new player so they can see hives and other players
                     // Use a small delay to ensure the player's stream is fully connected
-                    Application.AddTimeout(TimeSpan.FromMilliseconds(300), () =>
+                    _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(300), () =>
                     {
                         // Always send game state snapshot when a player joins
                         // This includes hives (if game has started) and all player positions
@@ -3506,7 +3502,7 @@ public class Game : Window
                 // For clients, publish initial position after game starts so host can see them
                 if (_gameSession.Role == GameSessionRole.Client)
                 {
-                    Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+                    _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
                     {
                         PublishPlayerPosition();
                         return false; // One-time
@@ -3820,11 +3816,11 @@ public class Game : Window
         {
             // Find and clear the bullet before removing it
             var bullet = _bullets.FirstOrDefault(b => b.BulletId == bulletMsg.BulletId);
-            if (bullet != null && Application.Driver != null)
+            if (bullet != null)
             {
                 // Get viewport information to clear the bullet
-                int currentWidth = Application.Driver.Cols;
-                int currentHeight = Application.Driver.Rows;
+                int currentWidth = Frame.Width;
+                int currentHeight = Frame.Height;
                 int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
                 int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
                 
@@ -3847,10 +3843,10 @@ public class Game : Window
                     freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
                     viewportX >= 0 && viewportX < freshMap[viewportY].Length)
                 {
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                    Application.Driver.Move(viewportX, viewportY + StatusBarHeight);
-                    Application.Driver.AddRune(freshMap[viewportY][viewportX]);
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                    SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                    Move(viewportX, viewportY + StatusBarHeight);
+                    AddRune(freshMap[viewportY][viewportX]);
+                    SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                 }
                 
                 // Also clear bullet's previous position if different
@@ -3868,10 +3864,10 @@ public class Game : Window
                         freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
                         prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
                     {
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.Black));
-                        Application.Driver.Move(prevViewportX, prevViewportY + StatusBarHeight);
-                        Application.Driver.AddRune(freshMap[prevViewportY][prevViewportX]);
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+                        Move(prevViewportX, prevViewportY + StatusBarHeight);
+                        AddRune(freshMap[prevViewportY][prevViewportX]);
+                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                     }
                 }
                 
@@ -4049,7 +4045,7 @@ public class Game : Window
         if (_gameSession.Role == GameSessionRole.Host)
         {
             // Small delay to ensure all players' streams are active, then publish game state
-            Application.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+            _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
             {
                 PublishGameStateSnapshot();
                 PublishPlayerPosition(); // Also publish host's initial position
@@ -4222,3 +4218,9 @@ public class Game : Window
     }
 
 }
+
+
+
+
+
+

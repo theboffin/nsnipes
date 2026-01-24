@@ -1,5 +1,10 @@
-using Terminal.Gui;
+using Terminal.Gui.App;
+using Terminal.Gui.Views;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Input;
+using Terminal.Gui.Drawing;
 using System.Linq;
+using DrawingAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace NSnipes;
 
@@ -9,7 +14,7 @@ public class PlayerScoreInfo
     public int Score { get; set; } = 0;
 }
 
-public class GameOverScreen
+public class GameOverScreen : View
 {
     // State
     private bool _isActive = false;
@@ -104,6 +109,16 @@ public class GameOverScreen
     public bool IsActive => _isActive;
     public bool IsWaitingForEnter => _waitingForEnter;
     
+    public GameOverScreen()
+    {
+        X = 0;
+        Y = 0;
+        Width = Dim.Fill();
+        Height = Dim.Fill();
+        CanFocus = true;
+        Visible = false; // Start hidden
+    }
+    
     public void Show(List<PlayerScoreInfo> playerScores)
     {
         _isActive = true;
@@ -112,19 +127,8 @@ public class GameOverScreen
         _bannerStartTime = DateTime.Now;
         _bannerScrollPosition = 0;
         _playerScores = playerScores.OrderByDescending(p => p.Score).ToList();
-        
-        // Clear the screen with blue background
-        if (Application.Driver != null)
-        {
-            int width = Application.Driver.Cols;
-            int height = Application.Driver.Rows;
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-            for (int y = 0; y < height; y++)
-            {
-                Application.Driver.Move(0, y);
-                Application.Driver.AddStr(new string(' ', width));
-            }
-        }
+        Visible = true;
+        SetNeedsDraw();
     }
     
     public void Hide()
@@ -132,28 +136,32 @@ public class GameOverScreen
         _isActive = false;
         _bannerScrolling = false;
         _waitingForEnter = false;
+        Visible = false;
+        SetNeedsDraw();
     }
     
-    public void Draw()
+    protected override bool OnDrawingContent(DrawContext? dc)
     {
-        if (Application.Driver == null || !_isActive)
-            return;
+        if (dc == null || !IsInitialized || !_isActive)
+            return false;
             
-        int width = Application.Driver.Cols;
-        int height = Application.Driver.Rows;
+        int width = Frame.Width;
+        int height = Frame.Height;
         
-        // Always clear screen with blue background first
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        // Clear screen with blue background first
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            for (int x = 0; x < width; x++)
+            {
+                AddRune(new System.Text.Rune(' '));
+            }
         }
         
         if (_bannerScrolling)
         {
             // Animate GAME OVER banner scrolling in from left
-            // GAME (4 letters) + 3 gaps (2 cols each) + word gap (6 cols) + OVER (4 letters) + 3 gaps (2 cols each)
             double elapsedSeconds = (DateTime.Now - _bannerStartTime).TotalSeconds;
             int bannerWidth = (7 * 4 + 3 * 2) + 6 + (7 * 4 + 3 * 2); // GAME + gap + OVER
             int targetX = (width - bannerWidth) / 2; // Center position
@@ -180,15 +188,17 @@ public class GameOverScreen
         {
             DrawScreen(width, height);
         }
+        
+        return true;
     }
     
-    public bool HandleKey(dynamic e)
+    public bool HandleKey(Key key)
     {
         if (!_isActive || !_waitingForEnter)
             return false;
         
         // Only ENTER key returns to intro screen
-        if (e.KeyCode == KeyCode.Enter)
+        if (key.ToString().Contains("Enter"))
         {
             Hide();
             OnReturnToIntro?.Invoke();
@@ -200,10 +210,7 @@ public class GameOverScreen
     
     private void DrawBanner(int startX, int screenHeight)
     {
-        if (Application.Driver == null)
-            return;
-            
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         
         // Banner is 7 rows tall, positioned in upper third of screen
         int bannerStartY = screenHeight / 4;
@@ -225,10 +232,10 @@ public class GameOverScreen
                     for (int col = 0; col < 7; col++)
                     {
                         int x = letterX + col;
-                        if (x >= 0 && x < Application.Driver.Cols)
+                        if (x >= 0 && x < Frame.Width)
                         {
-                            Application.Driver.Move(x, y);
-                            Application.Driver.AddRune(letter[row][col]);
+                            Move(x, y);
+                            AddRune(new System.Text.Rune(letter[row][col]));
                         }
                     }
                 }
@@ -257,10 +264,10 @@ public class GameOverScreen
                     for (int col = 0; col < 7; col++)
                     {
                         int x = letterX + col;
-                        if (x >= 0 && x < Application.Driver.Cols)
+                        if (x >= 0 && x < Frame.Width)
                         {
-                            Application.Driver.Move(x, y);
-                            Application.Driver.AddRune(letter[row][col]);
+                            Move(x, y);
+                            AddRune(new System.Text.Rune(letter[row][col]));
                         }
                     }
                 }
@@ -274,7 +281,6 @@ public class GameOverScreen
     private void DrawScreen(int width, int height)
     {
         // Draw game over screen with banner and player scores
-        // Note: Screen is already cleared with blue background in Draw() method
         
         // Draw GAME OVER banner (centered)
         int bannerWidth = (7 * 4 + 3 * 2) + 6 + (7 * 4 + 3 * 2); // GAME + gap + OVER
@@ -290,11 +296,12 @@ public class GameOverScreen
         string scoresHeader = "-< SCORES >-";
         int headerX = (width - scoresHeader.Length) / 2;
         int headerY = scoresStartY;
-        if (Application.Driver != null)
+        
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(headerX, headerY);
+        foreach (char c in scoresHeader)
         {
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-            Application.Driver.Move(headerX, headerY);
-            Application.Driver.AddStr(scoresHeader);
+            AddRune(new System.Text.Rune(c));
         }
         
         // Draw player scores below header
@@ -315,15 +322,18 @@ public class GameOverScreen
                     // Top player in cyan, others in yellow
                     if (i == 0)
                     {
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
+                        SetAttribute(new DrawingAttribute(Color.Cyan, Color.Blue));
                     }
                     else
                     {
-                        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Blue));
+                        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Blue));
                     }
                     
-                    Application.Driver.Move(x, y);
-                    Application.Driver.AddStr(scoreText);
+                    Move(x, y);
+                    foreach (char c in scoreText)
+                    {
+                        AddRune(new System.Text.Rune(c));
+                    }
                 }
             }
         }
@@ -332,8 +342,11 @@ public class GameOverScreen
         string enterMessage = "Press ENTER to continue";
         int enterX = (width - enterMessage.Length) / 2;
         int enterY = height - 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(enterX, enterY);
-        Application.Driver.AddStr(enterMessage);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(enterX, enterY);
+        foreach (char c in enterMessage)
+        {
+            AddRune(new System.Text.Rune(c));
+        }
     }
 }

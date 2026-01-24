@@ -1,14 +1,19 @@
-using Terminal.Gui;
+using Terminal.Gui.App;
+using Terminal.Gui.Views;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Input;
+using Terminal.Gui.Drawing;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Grpc.Net.Client;
 using Grpc.Core;
 using NSnipes.GrpcServer;
+using DrawingAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace NSnipes;
 
-public class IntroScreen
+public class IntroScreen : View
 {
     // Events for communication with Game
     public event Action<int>? OnStartGame; // Level - called when starting a new game from menu
@@ -146,6 +151,17 @@ public class IntroScreen
             Show();
             OnReturnToIntro?.Invoke();
         };
+        
+        // Initialize View properties
+        X = 0;
+        Y = 0;
+        Width = Dim.Fill();
+        Height = Dim.Fill();
+        CanFocus = true;
+        Visible = true; // Start visible
+        
+        // Add GameOverScreen as child view
+        Add(_gameOverScreen);
     }
     
     public bool IsActive => _isActive;
@@ -169,6 +185,8 @@ public class IntroScreen
         _enteringInitials = false;
         _enteringStartingLevel = false;
         _enteringPlayerCount = false;
+        Visible = true;
+        SetNeedsDraw();
         _startingLevelInput = "1";
         _selectedStartingLevel = 1;
         _bannerStartTime = DateTime.Now;
@@ -177,19 +195,19 @@ public class IntroScreen
         _introPlayerY = 0; // Will be calculated during animation
         
         // Clear the screen before showing intro
-        if (Application.Driver != null)
+        if (IsInitialized)
         {
-            int width = Application.Driver.Cols;
-            int height = Application.Driver.Rows;
+            int width = Frame.Width;
+            int height = Frame.Height;
             int bannerWidth = 7 * 7 + 6 * 2;
             _bannerScrollPosition = -bannerWidth; // Start off-screen
             
             // Clear entire screen with blue background
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+            SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
             for (int y = 0; y < height; y++)
             {
-                Application.Driver.Move(0, y);
-                Application.Driver.AddStr(new string(' ', width));
+                Move(0, y);
+                this.AddString(new string(' ', width));
             }
         }
     }
@@ -202,70 +220,76 @@ public class IntroScreen
         _clearingMessage = message;
         _gameOverScreen.Hide();
         _isStartingNewGame = isStartingNewGame; // Track if this is for starting a new game
+        _isActive = true; // Activate intro screen for clearing effect
+        Visible = true; // Make visible for clearing effect
+        SetNeedsDraw();
     }
     
     public void ShowGameOver(List<PlayerScoreInfo> playerScores)
     {
+        // Make IntroScreen visible so GameOverScreen (child view) can be rendered
+        Visible = true;
         _gameOverScreen.Show(playerScores);
+        SetNeedsDraw();
     }
     
-    public void Draw()
+    protected override bool OnDrawingContent(DrawContext? dc)
     {
-        if (Application.Driver == null)
-            return;
+        if (dc == null || !IsInitialized)
+            return false;
             
-        int width = Application.Driver.Cols;
-        int height = Application.Driver.Rows;
+        int width = Frame.Width;
+        int height = Frame.Height;
         
-        // Draw game over screen if active
+        // Draw game over screen if active (it will draw itself as a child view)
         if (_gameOverScreen.IsActive)
         {
-            _gameOverScreen.Draw();
-            return;
+            _gameOverScreen.SetNeedsDraw();
+            return true;
         }
         
         if (_clearingScreen)
         {
             DrawClearingEffect(width, height);
-            return;
+            return true;
         }
         
         if (_waitingForPlayers)
         {
             DrawWaitingForPlayers(width, height);
-            return;
+            return true;
         }
         
         if (_enteringStartingLevel)
         {
             DrawStartingLevelInput(width, height);
-            return;
+            return true;
         }
         
         if (_enteringPlayerCount)
         {
             DrawPlayerCountInput(width, height);
-            return;
+            return true;
         }
         
         if (_enteringGameId)
         {
             DrawGameIdInput(width, height);
-            return;
+            return true;
         }
         
         if (_enteringServerConfig)
         {
             DrawServerConfigInput(width, height);
-            return;
+            return true;
         }
         
         // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            this.AddString(new string(' ', width));
         }
         
         // Check if we're in the intro animation phase (banner scrolling or player exiting)
@@ -353,20 +377,22 @@ public class IntroScreen
             DrawMenu(width, height);
             _lastDrawnMenuIndex = _selectedMenuIndex; // Track what was drawn
         }
+        
+        return true;
     }
     
-    public bool HandleKey(dynamic e)
+    public bool HandleKey(Key key)
     {
         // Handle game over key press - this must be checked first
         if (_gameOverScreen.IsActive)
         {
-            return _gameOverScreen.HandleKey(e);
+            return _gameOverScreen.HandleKey(key);
         }
         
         // Handle intro screen key press
         if (_isActive && !_clearingScreen)
         {
-            HandleIntroScreenKey(e);
+            HandleIntroScreenKey(key);
             return true;
         }
         
@@ -379,42 +405,44 @@ public class IntroScreen
         return false;
     }
     
-    private void HandleIntroScreenKey(dynamic e)
+    private void HandleIntroScreenKey(Key key)
     {
+        var keyStr = key.ToString();
+        
         if (_enteringInitials)
         {
-            HandleInitialsInput(e);
+            HandleInitialsInput(key);
             return;
         }
         
         if (_enteringStartingLevel)
         {
-            HandleStartingLevelInput(e);
+            HandleStartingLevelInput(key);
             return;
         }
         
         if (_enteringPlayerCount)
         {
-            HandlePlayerCountInput(e);
+            HandlePlayerCountInput(key);
             return;
         }
         
         if (_enteringGameId)
         {
-            HandleGameIdInput(e);
+            HandleGameIdInput(key);
             return;
         }
         
         if (_enteringServerConfig)
         {
-            HandleServerConfigInput(e);
+            HandleServerConfigInput(key);
             return;
         }
         
         if (_waitingForPlayers)
         {
             // During wait, allow Escape to cancel
-            if (e.KeyCode == KeyCode.Esc)
+            if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
             {
                 _waitingForPlayers = false;
                 _enteringPlayerCount = false;
@@ -428,42 +456,41 @@ public class IntroScreen
             return;
         
         // Handle menu navigation
-        switch (e.KeyCode)
+        if (keyStr.Contains("Up") || keyStr.Contains("8"))
         {
-            case KeyCode.CursorUp:
-            case KeyCode.D8: // Numeric keypad 8
-                _selectedMenuIndex = (_selectedMenuIndex - 1 + _menuItems.Length) % _menuItems.Length;
-                break;
-                
-            case KeyCode.CursorDown:
-            case KeyCode.D2: // Numeric keypad 2
-                _selectedMenuIndex = (_selectedMenuIndex + 1) % _menuItems.Length;
-                break;
-                
-            case KeyCode.Enter:
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.S:
-                _selectedMenuIndex = 0;
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.J:
-                _selectedMenuIndex = 1;
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.I:
-                _selectedMenuIndex = 2;
-                HandleMenuSelection();
-                break;
-                
-            case KeyCode.E:
-            case KeyCode.X:
-                _selectedMenuIndex = 3;
-                HandleMenuSelection();
-                break;
+            _selectedMenuIndex = (_selectedMenuIndex - 1 + _menuItems.Length) % _menuItems.Length;
+        }
+        else if (keyStr.Contains("Down") || keyStr.Contains("2"))
+        {
+            _selectedMenuIndex = (_selectedMenuIndex + 1) % _menuItems.Length;
+        }
+        else if (keyStr.Contains("Enter"))
+        {
+            HandleMenuSelection();
+        }
+        else
+        {
+            char keyChar = keyStr.Length > 0 ? char.ToUpper(keyStr[0]) : '\0';
+            switch (keyChar)
+            {
+                case 'S':
+                    _selectedMenuIndex = 0;
+                    HandleMenuSelection();
+                    break;
+                case 'J':
+                    _selectedMenuIndex = 1;
+                    HandleMenuSelection();
+                    break;
+                case 'I':
+                    _selectedMenuIndex = 2;
+                    HandleMenuSelection();
+                    break;
+                case 'E':
+                case 'X':
+                    _selectedMenuIndex = 3;
+                    HandleMenuSelection();
+                    break;
+            }
         }
     }
     
@@ -501,10 +528,12 @@ public class IntroScreen
         }
     }
     
-    private void HandleInitialsInput(dynamic e)
+    private void HandleInitialsInput(Key key)
     {
+        var keyStr = key.ToString();
+        
         // Handle backspace
-        if (e.KeyCode == KeyCode.Backspace)
+        if (keyStr.Contains("Backspace"))
         {
             if (_initialsInput.Length > 0)
             {
@@ -514,7 +543,7 @@ public class IntroScreen
         }
         
         // Handle Escape to cancel
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             _enteringInitials = false;
             _initialsInput = "";
@@ -522,7 +551,7 @@ public class IntroScreen
         }
         
         // Get character from key
-        char? ch = GetCharFromKey(e);
+        char? ch = GetCharFromKey(key);
         if (ch == null)
             return;
         
@@ -548,10 +577,12 @@ public class IntroScreen
         }
     }
     
-    private void HandleStartingLevelInput(dynamic e)
+    private void HandleStartingLevelInput(Key key)
     {
+        var keyStr = key.ToString();
+        
         // Handle backspace
-        if (e.KeyCode == KeyCode.Backspace)
+        if (keyStr.Contains("Backspace"))
         {
             if (_startingLevelInput.Length > 0)
             {
@@ -561,7 +592,7 @@ public class IntroScreen
         }
         
         // Handle Escape to cancel
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             _enteringStartingLevel = false;
             _startingLevelInput = "1";
@@ -570,7 +601,7 @@ public class IntroScreen
         }
         
         // Handle Enter to confirm
-        if (e.KeyCode == KeyCode.Enter)
+        if (keyStr.Contains("Enter"))
         {
             if (int.TryParse(_startingLevelInput, out int level) && level >= 1 && level <= 50)
             {
@@ -584,7 +615,7 @@ public class IntroScreen
         }
         
         // Get character from key
-        char? ch = GetCharFromKey(e);
+        char? ch = GetCharFromKey(key);
         if (ch.HasValue)
         {
             // Only allow digits
@@ -599,10 +630,12 @@ public class IntroScreen
         }
     }
     
-    private void HandlePlayerCountInput(dynamic e)
+    private void HandlePlayerCountInput(Key key)
     {
+        var keyStr = key.ToString();
+        
         // Handle backspace
-        if (e.KeyCode == KeyCode.Backspace)
+        if (keyStr.Contains("Backspace"))
         {
             if (_playerCountInput.Length > 0)
             {
@@ -612,7 +645,7 @@ public class IntroScreen
         }
         
         // Handle Escape to cancel
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             _enteringPlayerCount = false;
             _playerCountInput = "1";
@@ -623,7 +656,7 @@ public class IntroScreen
         }
         
         // Handle Enter to confirm
-        if (e.KeyCode == KeyCode.Enter)
+        if (keyStr.Contains("Enter"))
         {
             if (int.TryParse(_playerCountInput, out int count) && count >= 1 && count <= 5)
             {
@@ -637,7 +670,7 @@ public class IntroScreen
         }
         
         // Get character from key
-        char? ch = GetCharFromKey(e);
+        char? ch = GetCharFromKey(key);
         if (ch == null)
             return;
         
@@ -659,10 +692,12 @@ public class IntroScreen
         }
     }
     
-    private void HandleGameIdInput(dynamic e)
+    private void HandleGameIdInput(Key key)
     {
+        var keyStr = key.ToString();
+        
         // Handle backspace
-        if (e.KeyCode == KeyCode.Backspace)
+        if (keyStr.Contains("Backspace"))
         {
             if (_gameIdInput.Length > 0)
             {
@@ -672,7 +707,7 @@ public class IntroScreen
         }
         
         // Handle Escape to cancel
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             _enteringGameId = false;
             _gameIdInput = "";
@@ -680,7 +715,7 @@ public class IntroScreen
         }
         
         // Handle Enter to confirm
-        if (e.KeyCode == KeyCode.Enter)
+        if (keyStr.Contains("Enter"))
         {
             if (_gameIdInput.Length == 6)
             {
@@ -691,7 +726,7 @@ public class IntroScreen
         }
         
         // Get character from key
-        char? ch = GetCharFromKey(e);
+        char? ch = GetCharFromKey(key);
         if (ch == null)
             return;
         
@@ -766,39 +801,41 @@ public class IntroScreen
         StartClearingEffect(levelMessage, isStartingNewGame: true);
     }
     
-    private char? GetCharFromKey(dynamic e)
+    private char? GetCharFromKey(Key key)
     {
-        // Try to get character from KeyEvent
-        try
+        // Get the string representation of the key
+        string keyStr = key.ToString();
+        
+        // If the string is empty, no character
+        if (string.IsNullOrEmpty(keyStr))
+            return null;
+        
+        // For single character keys, return the character
+        // This includes letters, numbers, and some special characters
+        if (keyStr.Length == 1)
         {
-            if (e.KeyEvent != null && e.KeyEvent.Key != null)
-            {
-                int keyValue = (int)e.KeyEvent.Key;
-                if (keyValue >= 32 && keyValue <= 126) // Printable ASCII
-                {
-                    return (char)keyValue;
-                }
-            }
-        }
-        catch
-        {
-            // Fall through to alternative method
+            char ch = keyStr[0];
+            // Return if it's a printable ASCII character
+            if (ch >= 32 && ch <= 126)
+                return ch;
         }
         
-        // Alternative: check KeyCode for letter keys
-        try
+        // Check if it starts with "Key." (e.g., "Key.A", "Key.D0" for digit 0, etc.)
+        if (keyStr.StartsWith("Key."))
         {
-            if (e.KeyCode >= KeyCode.A && e.KeyCode <= KeyCode.Z)
+            string keyPart = keyStr.Substring(4); // Remove "Key." prefix
+            
+            // Handle digit keys (D0-D9)
+            if (keyPart.StartsWith("D") && keyPart.Length == 2 && char.IsDigit(keyPart[1]))
             {
-                return (char)('A' + ((int)e.KeyCode - (int)KeyCode.A));
+                return keyPart[1]; // Return the digit
             }
-            if (e.KeyCode >= KeyCode.D0 && e.KeyCode <= KeyCode.D9)
+            
+            // Handle letter keys (single letter after "Key.")
+            if (keyPart.Length == 1 && char.IsLetter(keyPart[0]))
             {
-                return (char)('0' + ((int)e.KeyCode - (int)KeyCode.D0));
+                return keyPart[0];
             }
-        }
-        catch
-        {
         }
         
         return null;
@@ -806,7 +843,7 @@ public class IntroScreen
     
     private void DrawMenu(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Calculate menu position (centered below banner, with clear separation)
@@ -821,28 +858,28 @@ public class IntroScreen
         int padding = 2; // Padding from box borders
         
         // Draw box border (using single-line characters)
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         
         // Top border with title
-        Application.Driver.Move(boxX, boxY);
-        Application.Driver.AddRune('┌');
+        Move(boxX, boxY);
+        this.AddChar('┌');
         // Draw horizontal line with title
         string title = " Options ";
         int titleStartX = boxX + (boxWidth - title.Length) / 2;
         for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
         {
-            Application.Driver.Move(x, boxY);
+            Move(x, boxY);
             if (x >= titleStartX && x < titleStartX + title.Length)
             {
-                Application.Driver.AddRune(title[x - titleStartX]);
+                this.AddChar(title[x - titleStartX]);
             }
             else
             {
-                Application.Driver.AddRune('─');
+                this.AddChar('─');
             }
         }
-        Application.Driver.Move(boxX + boxWidth - 1, boxY);
-        Application.Driver.AddRune('┐');
+        Move(boxX + boxWidth - 1, boxY);
+        this.AddChar('┐');
         
         // Calculate actual menu items (with gaps after Initials and Configure Server)
         int menuItemCount = _menuItems.Length + 2; // +2 for gaps after Initials and Configure Server
@@ -889,39 +926,39 @@ public class IntroScreen
             if (i == _selectedMenuIndex)
             {
                 // Selected: white background, blue text - fill entire box width
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Blue, Color.White));
+                SetAttribute(new DrawingAttribute(Color.Blue, Color.White));
                 // Fill the entire line width (minus borders)
                 for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
                 {
-                    Application.Driver.Move(x, menuY);
-                    Application.Driver.AddRune(' ');
+                    Move(x, menuY);
+                    this.AddChar(' ');
                 }
             }
             else
             {
                 // Not selected: white text, blue background
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+                SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
             }
             
             // Draw menu text character by character (left-justified with padding)
             // Highlight first letter in yellow
-            Application.Driver.Move(menuX, menuY);
+            Move(menuX, menuY);
             bool firstLetterDrawn = false;
             foreach (char c in menuText)
             {
                 if (!firstLetterDrawn && char.IsLetter(c))
                 {
                     // First letter - draw in yellow
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                    Application.Driver.AddRune(c);
+                    SetAttribute(new DrawingAttribute(Color.Yellow, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                    this.AddChar(c);
                     firstLetterDrawn = true;
                     // Reset to menu color
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                    SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
                 }
                 else
                 {
                     // Regular character - use current menu color
-                    Application.Driver.AddRune(c);
+                    this.AddChar(c);
                 }
             }
             
@@ -936,30 +973,30 @@ public class IntroScreen
                         if (c == '▊')
                         {
                             // Caret - use current selection color
-                            Application.Driver.AddRune(c);
+                            this.AddChar(c);
                         }
                         else if (c == '_')
                         {
                             // Placeholder - use current selection color
-                            Application.Driver.AddRune(c);
+                            this.AddChar(c);
                         }
                         else
                         {
                             // Typed letter - use purple
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                            Application.Driver.AddRune(c);
+                            SetAttribute(new DrawingAttribute(Color.Magenta, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            this.AddChar(c);
                             // Reset to menu color
-                            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
                         }
                     }
                 }
                 else
                 {
                     // Draw initials in Cyan
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                    Application.Driver.AddStr(initialsPart);
+                    SetAttribute(new DrawingAttribute(Color.Cyan, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                    this.AddString(initialsPart);
                     // Reset to menu color
-                    Application.Driver.SetAttribute(new Terminal.Gui.Attribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                    SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
                 }
             }
             
@@ -976,25 +1013,25 @@ public class IntroScreen
         for (int row = 1; row <= menuItemCount; row++)
         {
             int y = boxY + row;
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-            Application.Driver.Move(boxX, y);
-            Application.Driver.AddRune('│');
-            Application.Driver.Move(boxX + boxWidth - 1, y);
-            Application.Driver.AddRune('│');
+            SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+            Move(boxX, y);
+            this.AddChar('│');
+            Move(boxX + boxWidth - 1, y);
+            this.AddChar('│');
         }
         
         // Bottom border (after all menu items)
         int bottomY = boxY + menuItemCount + 1;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(boxX, bottomY);
-        Application.Driver.AddRune('└');
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(boxX, bottomY);
+        this.AddChar('└');
         for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
         {
-            Application.Driver.Move(x, bottomY);
-            Application.Driver.AddRune('─');
+            Move(x, bottomY);
+            this.AddChar('─');
         }
-        Application.Driver.Move(boxX + boxWidth - 1, bottomY);
-        Application.Driver.AddRune('┘');
+        Move(boxX + boxWidth - 1, bottomY);
+        this.AddChar('┘');
         
         // Draw server status at the bottom of the screen
         DrawServerStatus(width, height);
@@ -1002,7 +1039,7 @@ public class IntroScreen
     
     private void DrawServerStatus(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Check server status periodically
@@ -1037,9 +1074,9 @@ public class IntroScreen
         int statusY = height - 2;
         int statusX = (width - statusText.Length) / 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(statusColor, Color.Blue));
-        Application.Driver.Move(statusX, statusY);
-        Application.Driver.AddStr(statusText);
+        SetAttribute(new DrawingAttribute(statusColor, Color.Blue));
+        Move(statusX, statusY);
+        this.AddString(statusText);
     }
     
     private void CheckServerStatus()
@@ -1104,13 +1141,13 @@ public class IntroScreen
     
     private void DrawIntroPlayer(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Clear previous position if it was on screen and different from current
         if (_introPlayerPrevX != _introPlayerX && _introPlayerPrevX >= 0 && _introPlayerPrevX < width)
         {
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+            SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
             // Clear the 2x3 player area
             for (int row = 0; row < 3; row++)
             {
@@ -1122,8 +1159,8 @@ public class IntroScreen
                         int clearX = _introPlayerPrevX + col;
                         if (clearX >= 0 && clearX < width)
                         {
-                            Application.Driver.Move(clearX, clearY);
-                            Application.Driver.AddRune(' ');
+                            Move(clearX, clearY);
+                            this.AddChar(' ');
                         }
                     }
                 }
@@ -1140,36 +1177,36 @@ public class IntroScreen
         var mouth = now.Millisecond < 500 ? "◄►" : "◂▸";
         
         // Draw player at intro position
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         
         // Draw eyes
         if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY >= 0 && _introPlayerY < height)
         {
-            Application.Driver.Move(_introPlayerX, _introPlayerY);
-            Application.Driver.AddStr(eyes);
+            Move(_introPlayerX, _introPlayerY);
+            this.AddString(eyes);
         }
         
         // Draw mouth
         if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY + 1 >= 0 && _introPlayerY + 1 < height)
         {
-            Application.Driver.Move(_introPlayerX, _introPlayerY + 1);
-            Application.Driver.AddStr(mouth);
+            Move(_introPlayerX, _introPlayerY + 1);
+            this.AddString(mouth);
         }
         
         // Draw initials
         if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY + 2 >= 0 && _introPlayerY + 2 < height)
         {
-            Application.Driver.Move(_introPlayerX, _introPlayerY + 2);
-            Application.Driver.AddStr(_config.Initials);
+            Move(_introPlayerX, _introPlayerY + 2);
+            this.AddString(_config.Initials);
         }
     }
     
     private void DrawBanner(int startX, int screenHeight)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
             
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         
         // Banner is 7 rows tall, with 1 blank row above and below
         // Position banner higher up (about 1/3 from top) to leave room for menu below
@@ -1193,10 +1230,10 @@ public class IntroScreen
                     for (int col = 0; col < 7; col++)
                     {
                         int x = letterX + col;
-                        if (x >= 0 && x < Application.Driver.Cols)
+                        if (x >= 0 && x < Frame.Width)
                         {
-                            Application.Driver.Move(x, y);
-                            Application.Driver.AddRune(letter[row][col]);
+                            Move(x, y);
+                            this.AddChar(letter[row][col]);
                         }
                     }
                 }
@@ -1206,7 +1243,7 @@ public class IntroScreen
     
     private void DrawClearingEffect(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         const int StatusBarHeight = 2; // First 2 rows reserved for status information
@@ -1253,7 +1290,7 @@ public class IntroScreen
         int newRectSize = messageAreaStartSize + (int)((maxSize - messageAreaStartSize) * progress);
         
         // Draw expanding rectangle and reveal map underneath
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         
         for (int y = StatusBarHeight; y < height; y++)
         {
@@ -1282,15 +1319,15 @@ public class IntroScreen
                 if (distance <= newRectSize && !inMessageArea)
                 {
                     // Inside rectangle but not in message area - draw '*'
-                    Application.Driver.Move(x, y);
-                    Application.Driver.AddRune('*');
+                    Move(x, y);
+                    this.AddChar('*');
                 }
                 else if (!inMessageArea && _getMapCharAtPosition != null)
                 {
                     // Outside rectangle and not in message area - draw map character
                     char mapChar = _getMapCharAtPosition(x, y - StatusBarHeight);
-                    Application.Driver.Move(x, y);
-                    Application.Driver.AddRune(mapChar);
+                    Move(x, y);
+                    this.AddChar(mapChar);
                 }
                 // If in message area, skip drawing here (will draw message below)
             }
@@ -1302,7 +1339,7 @@ public class IntroScreen
         if (!string.IsNullOrEmpty(_clearingMessage) && !string.IsNullOrEmpty(messageWithSpacing))
         {
             // Draw blank rows above and below the message (spaces, not asterisks)
-            Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Black));
+            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
             
             // Clear the area around the message (above, message row, below) with spaces
             for (int rowOffset = -1; rowOffset <= 1; rowOffset++)
@@ -1315,15 +1352,15 @@ public class IntroScreen
                     int clearX = (width - clearWidth) / 2;
                     for (int x = clearX; x < clearX + clearWidth && x < width; x++)
                     {
-                        Application.Driver.Move(x, y);
-                        Application.Driver.AddRune(' '); // Use spaces, not asterisks
+                        Move(x, y);
+                        this.AddChar(' '); // Use spaces, not asterisks
                     }
                 }
             }
             
             // Draw the message on top
-            Application.Driver.Move(messageX, messageY);
-            Application.Driver.AddStr(messageWithSpacing);
+            Move(messageX, messageY);
+            this.AddString(messageWithSpacing);
         }
         
         // When rectangle covers entire screen, transition to game
@@ -1332,6 +1369,7 @@ public class IntroScreen
             // Normal game start or respawn
             _isActive = false;
             _clearingScreen = false;
+            Visible = false; // Hide the intro screen
             
             // Only call OnStartGame if we're actually starting a new game (from menu)
             // If this is a respawn, just end the clearing effect without resetting game state
@@ -1351,15 +1389,15 @@ public class IntroScreen
     
     private void DrawStartingLevelInput(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            this.AddString(new string(' ', width));
         }
         
         // Draw prompt
@@ -1367,39 +1405,39 @@ public class IntroScreen
         int promptX = (width - prompt.Length) / 2;
         int promptY = height / 2 - 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(promptX, promptY);
-        Application.Driver.AddStr(prompt);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(promptX, promptY);
+        this.AddString(prompt);
         
         // Draw input with caret
         string inputDisplay = _startingLevelInput + "▊";
         int inputX = (width - inputDisplay.Length) / 2;
         int inputY = promptY + 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
-        Application.Driver.Move(inputX, inputY);
-        Application.Driver.AddStr(inputDisplay);
+        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
+        Move(inputX, inputY);
+        this.AddString(inputDisplay);
         
         // Draw instructions
         string instructions = "Press ENTER to confirm, ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = inputY + 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(instX, instY);
-        Application.Driver.AddStr(instructions);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(instX, instY);
+        this.AddString(instructions);
     }
     
     private void DrawPlayerCountInput(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            this.AddString(new string(' ', width));
         }
         
         // Draw prompt
@@ -1407,39 +1445,39 @@ public class IntroScreen
         int promptX = (width - prompt.Length) / 2;
         int promptY = height / 2 - 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(promptX, promptY);
-        Application.Driver.AddStr(prompt);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(promptX, promptY);
+        this.AddString(prompt);
         
         // Draw input with caret
         string inputDisplay = _playerCountInput + "▊";
         int inputX = (width - inputDisplay.Length) / 2;
         int inputY = promptY + 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
-        Application.Driver.Move(inputX, inputY);
-        Application.Driver.AddStr(inputDisplay);
+        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
+        Move(inputX, inputY);
+        this.AddString(inputDisplay);
         
         // Draw instructions
         string instructions = "Press ENTER to confirm, ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = inputY + 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(instX, instY);
-        Application.Driver.AddStr(instructions);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(instX, instY);
+        this.AddString(instructions);
     }
     
     private void DrawGameIdInput(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            this.AddString(new string(' ', width));
         }
         
         // Draw prompt
@@ -1447,9 +1485,9 @@ public class IntroScreen
         int promptX = (width - prompt.Length) / 2;
         int promptY = height / 2 - 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(promptX, promptY);
-        Application.Driver.AddStr(prompt);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(promptX, promptY);
+        this.AddString(prompt);
         
         // Draw input with caret
         string inputDisplay = _gameIdInput.PadRight(6, '_');
@@ -1460,23 +1498,23 @@ public class IntroScreen
         int inputX = (width - inputDisplay.Length) / 2;
         int inputY = promptY + 2;
         
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
-        Application.Driver.Move(inputX, inputY);
+        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
+        Move(inputX, inputY);
         foreach (char c in inputDisplay)
         {
             if (c == '▊')
             {
-                Application.Driver.AddRune(c);
+                this.AddChar(c);
             }
             else if (c == '_')
             {
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
-                Application.Driver.AddRune(c);
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Magenta, Color.Blue));
+                SetAttribute(new DrawingAttribute(Color.Gray, Color.Blue));
+                this.AddChar(c);
+                SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
             }
             else
             {
-                Application.Driver.AddRune(c);
+                this.AddChar(c);
             }
         }
         
@@ -1484,22 +1522,22 @@ public class IntroScreen
         string instructions = "Press ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = inputY + 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(instX, instY);
-        Application.Driver.AddStr(instructions);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(instX, instY);
+        this.AddString(instructions);
     }
     
     private void DrawWaitingForPlayers(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            this.AddString(new string(' ', width));
         }
         
         // Update time remaining
@@ -1518,31 +1556,31 @@ public class IntroScreen
         
         int gameIdX = (width - gameIdText.Length) / 2;
         int gameIdY = height / 4;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Blue));
-        Application.Driver.Move(gameIdX, gameIdY);
-        Application.Driver.AddStr(gameIdText);
+        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Blue));
+        Move(gameIdX, gameIdY);
+        this.AddString(gameIdText);
         
         // Draw waiting message
         string waitingText = "Waiting for players...";
         int waitingX = (width - waitingText.Length) / 2;
         int waitingY = gameIdY + 3;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(waitingX, waitingY);
-        Application.Driver.AddStr(waitingText);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(waitingX, waitingY);
+        this.AddString(waitingText);
         
         // Draw player count
         string countText = $"{_currentPlayerCount} of {_maxPlayers} players joined";
         int countX = (width - countText.Length) / 2;
         int countY = waitingY + 2;
-        Application.Driver.Move(countX, countY);
-        Application.Driver.AddStr(countText);
+        Move(countX, countY);
+        this.AddString(countText);
         
         // Draw time remaining
         string timeText = $"Time remaining: {_timeRemaining} seconds";
         int timeX = (width - timeText.Length) / 2;
         int timeY = countY + 2;
-        Application.Driver.Move(timeX, timeY);
-        Application.Driver.AddStr(timeText);
+        Move(timeX, timeY);
+        this.AddString(timeText);
         
         // Draw joined players list
         if (_joinedPlayers.Count > 0)
@@ -1550,17 +1588,17 @@ public class IntroScreen
             int listY = timeY + 3;
             string listHeader = "Players joined:";
             int listHeaderX = (width - listHeader.Length) / 2;
-            Application.Driver.Move(listHeaderX, listY);
-            Application.Driver.AddStr(listHeader);
+            Move(listHeaderX, listY);
+            this.AddString(listHeader);
             
             int playerY = listY + 2;
             foreach (var initials in _joinedPlayers)
             {
                 string playerText = $"  • {initials}";
                 int playerX = (width - playerText.Length) / 2;
-                Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Cyan, Color.Blue));
-                Application.Driver.Move(playerX, playerY);
-                Application.Driver.AddStr(playerText);
+                SetAttribute(new DrawingAttribute(Color.Cyan, Color.Blue));
+                Move(playerX, playerY);
+                this.AddString(playerText);
                 playerY++;
             }
         }
@@ -1569,15 +1607,17 @@ public class IntroScreen
         string instructions = "Press ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = height - 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
-        Application.Driver.Move(instX, instY);
-        Application.Driver.AddStr(instructions);
+        SetAttribute(new DrawingAttribute(Color.Gray, Color.Blue));
+        Move(instX, instY);
+        this.AddString(instructions);
     }
     
-    private void HandleServerConfigInput(dynamic e)
+    private void HandleServerConfigInput(Key key)
     {
+        var keyStr = key.ToString();
+        
         // Handle backspace
-        if (e.KeyCode == KeyCode.Backspace)
+        if (keyStr.Contains("Backspace"))
         {
             if (_editingServerAddress && _serverAddressInput.Length > 0)
             {
@@ -1591,14 +1631,14 @@ public class IntroScreen
         }
         
         // Handle Tab to switch fields
-        if (e.KeyCode == KeyCode.Tab)
+        if (keyStr.Contains("Tab"))
         {
             _editingServerAddress = !_editingServerAddress;
             return;
         }
         
         // Handle Escape to cancel
-        if (e.KeyCode == KeyCode.Esc)
+        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
         {
             _enteringServerConfig = false;
             _serverAddressInput = "";
@@ -1608,7 +1648,7 @@ public class IntroScreen
         }
         
         // Handle Enter to confirm
-        if (e.KeyCode == KeyCode.Enter)
+        if (keyStr.Contains("Enter"))
         {
             if (_editingServerAddress)
             {
@@ -1636,7 +1676,7 @@ public class IntroScreen
         }
         
         // Get character from key
-        char? ch = GetCharFromKey(e);
+        char? ch = GetCharFromKey(key);
         if (ch == null)
             return;
         
@@ -1668,72 +1708,74 @@ public class IntroScreen
     
     private void DrawServerConfigInput(int width, int height)
     {
-        if (Application.Driver == null)
+        if (!IsInitialized)
             return;
         
         // Fill screen with blue background
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         for (int y = 0; y < height; y++)
         {
-            Application.Driver.Move(0, y);
-            Application.Driver.AddStr(new string(' ', width));
+            Move(0, y);
+            this.AddString(new string(' ', width));
         }
         
         // Draw title
         string title = "Configure Server";
         int titleX = (width - title.Length) / 2;
         int titleY = height / 2 - 4;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Yellow, Color.Blue));
-        Application.Driver.Move(titleX, titleY);
-        Application.Driver.AddStr(title);
+        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Blue));
+        Move(titleX, titleY);
+        this.AddString(title);
         
         // Draw address prompt
         string addressPrompt = "Server Address:";
         int addressPromptX = (width - 50) / 2;
         int addressPromptY = titleY + 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(addressPromptX, addressPromptY);
-        Application.Driver.AddStr(addressPrompt);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(addressPromptX, addressPromptY);
+        this.AddString(addressPrompt);
         
         // Draw address input
         string addressDisplay = _serverAddressInput.Length > 0 ? _serverAddressInput : _config.ServerAddress;
         int addressInputX = addressPromptX;
         int addressInputY = addressPromptY + 1;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
-        Application.Driver.Move(addressInputX, addressInputY);
-        Application.Driver.AddStr(addressDisplay);
+        SetAttribute(new DrawingAttribute(_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
+        Move(addressInputX, addressInputY);
+        this.AddString(addressDisplay);
         if (_editingServerAddress && _serverAddressInput.Length == 0)
         {
-            Application.Driver.AddRune('▊');
+            this.AddChar('▊');
         }
         
         // Draw port prompt
         string portPrompt = "Server Port:";
         int portPromptX = addressPromptX;
         int portPromptY = addressInputY + 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.White, Color.Blue));
-        Application.Driver.Move(portPromptX, portPromptY);
-        Application.Driver.AddStr(portPrompt);
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        Move(portPromptX, portPromptY);
+        this.AddString(portPrompt);
         
         // Draw port input
         string portDisplay = _serverPortInput.Length > 0 ? _serverPortInput : _config.ServerPort.ToString();
         int portInputX = portPromptX;
         int portInputY = portPromptY + 1;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(!_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
-        Application.Driver.Move(portInputX, portInputY);
-        Application.Driver.AddStr(portDisplay);
+        SetAttribute(new DrawingAttribute(!_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
+        Move(portInputX, portInputY);
+        this.AddString(portDisplay);
         if (!_editingServerAddress && _serverPortInput.Length == 0)
         {
-            Application.Driver.AddRune('▊');
+            this.AddChar('▊');
         }
         
         // Draw instructions
         string instructions = "Press TAB to switch fields, ENTER to confirm, ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = portInputY + 2;
-        Application.Driver.SetAttribute(new Terminal.Gui.Attribute(Color.Gray, Color.Blue));
-        Application.Driver.Move(instX, instY);
-        Application.Driver.AddStr(instructions);
+        SetAttribute(new DrawingAttribute(Color.Gray, Color.Blue));
+        Move(instX, instY);
+        this.AddString(instructions);
     }
 }
+
+
 

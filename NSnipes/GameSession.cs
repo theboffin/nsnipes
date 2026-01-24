@@ -29,12 +29,6 @@ public class GameSession
     public DateTime? StartTime { get; set; }
     public List<NetworkPlayerInfo> Players { get; set; } = new List<NetworkPlayerInfo>();
     
-    // Events
-    public event Action<NetworkPlayerInfo>? OnPlayerJoined;
-    public event Action<string>? OnPlayerLeft; // playerId
-    public event Action? OnGameStart;
-    public event Action? OnGameEnd;
-    
     public static string GenerateGameId()
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

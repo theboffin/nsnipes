@@ -1,22 +1,50 @@
 ﻿using NSnipes;
-using Terminal.Gui;
+using Terminal.Gui.App;
+using Terminal.Gui.Views;
+using Terminal.Gui.Input;
 
-Application.Init();
-Application.UngrabMouse();
+using IApplication app = Application.Create();
+app.Init();
 
-// Disable default Escape key quit behavior - we handle Escape ourselves in the Game class
-// In Terminal.Gui v2 alpha, set QuitKey to an unused key (F12) so Escape doesn't close the app
+// Hide cursor using ANSI escape sequence
 try
 {
-    // Set QuitKey to F12 (unused key) instead of Escape
-    Application.QuitKey = new Key(KeyCode.F12);
+    System.Console.Write("\x1b[?25l"); // Hide cursor
 }
-catch (Exception)
+catch
 {
-    // If setting QuitKey fails, our Application.KeyDown handler in Game class 
-    // will catch Escape and handle it before default behavior
-    // This is a fallback - the handler should still work
+    // Fall back to Console API if ANSI doesn't work
+    try
+    {
+        System.Console.CursorVisible = false;
+    }
+    catch
+    {
+        // Ignore if not available
+    }
 }
 
-Application.Run<Game>();
-Application.Shutdown();
+// Disable default Escape key quit behavior - we handle Escape ourselves in the Game class
+// Set QuitKey to F12 (unused key) instead of Escape
+// In Terminal.Gui v2, Key is created from character
+Application.QuitKey = new Key((char)0x7B); // F12 key code
+
+var game = new Game(app);
+
+try
+{
+    app.Run(game);
+}
+finally
+{
+    // Restore cursor visibility when application exits
+    try
+    {
+        System.Console.Write("\x1b[?25h"); // Show cursor ANSI sequence
+        System.Console.CursorVisible = true;
+    }
+    catch
+    {
+        // Ignore if not available
+    }
+}

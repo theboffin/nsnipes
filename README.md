@@ -157,7 +157,8 @@ So what's left to do:
   - ❌ Option to restart another game with all the same players
   - ❌ Level progression synchronization in multiplayer (currently host-only)
 - Technical Debt
-  - ⚠️ Update Terminal.Gui library to latest develop branch (may require significant rework)
+  - ✅ Update Terminal.Gui library to latest develop branch (v2.0.0-develop.4828 - completed!)
+  - ✅ Upgrade to .NET 10 (completed for NSnipes game client)
   - ⚠️ Fix global [ESC] key handling across all screens
   - ⚠️ Extensive testing needed for multiplayer stability
 
@@ -329,7 +330,29 @@ So what's left to do:
 
 ## Recent Changes
 
-### Multiplayer Synchronization Fixes (Latest)
+### Terminal.Gui v2 Upgrade and .NET 10 Migration (Latest)
+- **Upgraded to Terminal.Gui v2.0.0-develop.4828**: Complete migration from v2.0.0-prealpha.1895 to the latest develop branch
+  - Refactored to use `IApplication` pattern with `Application.Create()`, `app.Init()`, and `app.Run()`
+  - Converted all `Application.Driver` calls to `View`'s rendering methods (`OnDrawingContent`, `Move`, `SetAttribute`, `AddRune`)
+  - Updated keyboard handling from `Application.KeyDown` to `IApplication.Keyboard.KeyDown` with the new `Key` class
+  - Replaced `Application.AddTimeout` with `IApplication.TimedEvents.Add` for all game timers
+  - Converted `IntroScreen` and `GameOverScreen` to proper `View` subclasses with `OnDrawingContent` rendering
+  - Fixed visibility management for view hierarchy (child views only render when parent is visible)
+  - Added ANSI escape sequences for cursor visibility control
+  - Created `ViewHelpers` extension methods for common drawing operations
+- **Upgraded to .NET 10**: NSnipes game client now targets .NET 10 (NSnipes.GrpcServer remains on .NET 9)
+- **Zero Compilation Warnings**: All deprecated API usage eliminated, clean build with no warnings
+- **Performance Optimizations**: Optimized redraw triggers to only update when game state changes (improved from 3 FPS to 30-60 FPS)
+- **Input System Fixes**: 
+  - Fixed cursor keys properly moving player instead of firing bullets
+  - Fixed text input (initials, level selection, server config) working with Terminal.Gui v2 `Key` API
+  - Separated movement and firing key handling to prevent conflicts
+- **Game State Fixes**:
+  - Fixed Game Over screen not displaying when player loses all lives
+  - Fixed respawn animation and "X LIVES LEFT" banner display
+  - Fixed status bar flickering by removing stale caching optimizations
+
+### Multiplayer Synchronization Fixes
 - **Player Visibility Fix**: Fixed issue where Player 2 couldn't see Player 1
   - Problem: Position updates were received but network players weren't being created if player wasn't in game session
   - Solution: Network players are now created from position updates even if not yet in game session (with default values)
@@ -639,9 +662,6 @@ So what's left to do:
 ### ⚠️ Known Issues / Limitations
 
 - **Bullet Synchronization**: Bullets in multiplayer are not fully synchronized - needs refinement
-- **Terminal.Gui Library Update**: Need to update to latest develop branch
-  - May require significant rework as direct terminal driver access has been deprecated
-  - Will need to figure out alternative approach for low-level terminal operations
 - **Global ESC Key Handling**: Need to sort out global [ESC] key behavior across all screens
 - **Level Progression**: Level progression in multiplayer is host-only (clients receive level updates but don't trigger progression)
 - **Full Game State Sync**: Full game state synchronization (scores, lives) still being refined
@@ -661,7 +681,13 @@ So what's left to do:
 ## Project Dependencies
 
 This project is built with the following dependencies:
-- https://github.com/gui-cs/Terminal.Gui (v2.0.0-prealpha.1895)
+
+### Runtime Requirements
+- **.NET 10** - Required for NSnipes game client
+- **.NET 9** - Required for NSnipes.GrpcServer (multiplayer server)
+
+### NuGet Packages
+- **Terminal.Gui** (v2.0.0-develop.4828) - Modern console UI library https://github.com/gui-cs/Terminal.Gui
 - **Grpc.Net.Client** (v2.62.0) - gRPC client for .NET
 - **Grpc.AspNetCore** (v2.62.0) - gRPC server for ASP.NET Core
 - **Google.Protobuf** (v3.25.3) - Protocol buffer runtime
