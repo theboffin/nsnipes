@@ -44,7 +44,8 @@ public class GameSession
     
     public static string GeneratePlayerId()
     {
-        return $"player_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString().Substring(0, 8)}";
+        // Use range operator instead of Substring to avoid allocation
+        return $"player_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString()[..8]}";
     }
 }
 

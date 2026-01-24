@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 
 namespace NSnipes;
 
@@ -147,6 +147,10 @@ public class Map
         string[] rows = new string[frameHeight];
         int mapRow = (y - (frameHeight / 2) + FullMap.Length) % FullMap.Length;
         int mapCol = x - (frameWidth / 2);
+        
+        // Pre-allocate buffer outside loop to avoid CA2014 warning (stackalloc in loop)
+        // frameWidth is typically small (terminal width), so stackalloc is safe
+        Span<char> buffer = stackalloc char[frameWidth];
 
         for (int r = 0; r < frameHeight; r++)
         {
@@ -159,12 +163,15 @@ public class Map
             // Construct the row by taking from the right and wrapping to the left if needed  
             if (startCol + frameWidth <= rowLength)
             {
-                rows[r] = fullRow.AsSpan(startCol, frameWidth).ToString();//.Substring(startCol, frameWidth);
+                rows[r] = fullRow.AsSpan(startCol, frameWidth).ToString();
             }
             else
             {
+                // Avoid string concatenation - reuse pre-allocated buffer
                 int rightPartLength = rowLength - startCol;
-                rows[r] = fullRow.AsSpan(startCol, rightPartLength).ToString() + fullRow.AsSpan(0, frameWidth - rightPartLength).ToString();
+                fullRow.AsSpan(startCol, rightPartLength).CopyTo(buffer);
+                fullRow.AsSpan(0, frameWidth - rightPartLength).CopyTo(buffer[rightPartLength..]);
+                rows[r] = new string(buffer);
             }
 
             // Increment mapRow and wrap around if it exceeds the length of FullMap  

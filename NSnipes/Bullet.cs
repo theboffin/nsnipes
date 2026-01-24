@@ -15,7 +15,7 @@ public class Bullet
 
     public Bullet(double startX, double startY, double velocityX, double velocityY, string? bulletId = null, string? playerId = null, DateTime? createdAt = null)
     {
-        BulletId = bulletId ?? $"bullet_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString().Substring(0, 8)}";
+        BulletId = bulletId ?? $"bullet_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString()[..8]}";
         PlayerId = playerId ?? "";
         X = startX;
         Y = startY;

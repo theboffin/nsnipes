@@ -537,7 +537,8 @@ public class IntroScreen : View
         {
             if (_initialsInput.Length > 0)
             {
-                _initialsInput = _initialsInput.Substring(0, _initialsInput.Length - 1);
+                // Use range operator instead of Substring to avoid allocation
+                _initialsInput = _initialsInput[..^1];
             }
             return;
         }
@@ -586,7 +587,8 @@ public class IntroScreen : View
         {
             if (_startingLevelInput.Length > 0)
             {
-                _startingLevelInput = _startingLevelInput.Substring(0, _startingLevelInput.Length - 1);
+                // Use range operator instead of Substring to avoid allocation
+                _startingLevelInput = _startingLevelInput[..^1];
             }
             return;
         }
@@ -639,7 +641,8 @@ public class IntroScreen : View
         {
             if (_playerCountInput.Length > 0)
             {
-                _playerCountInput = _playerCountInput.Substring(0, _playerCountInput.Length - 1);
+                // Use range operator instead of Substring to avoid allocation
+                _playerCountInput = _playerCountInput[..^1];
             }
             return;
         }
@@ -683,7 +686,8 @@ public class IntroScreen : View
             }
             else if (_playerCountInput.Length == 1)
             {
-                string newInput = _playerCountInput + ch.Value;
+                // Avoid string concatenation - use string interpolation
+                string newInput = $"{_playerCountInput}{ch.Value}";
                 if (int.TryParse(newInput, out int count) && count >= 1 && count <= 5)
                 {
                     _playerCountInput = newInput;
@@ -701,7 +705,8 @@ public class IntroScreen : View
         {
             if (_gameIdInput.Length > 0)
             {
-                _gameIdInput = _gameIdInput.Substring(0, _gameIdInput.Length - 1);
+                // Use range operator instead of Substring to avoid allocation
+                _gameIdInput = _gameIdInput[..^1];
             }
             return;
         }
@@ -823,7 +828,8 @@ public class IntroScreen : View
         // Check if it starts with "Key." (e.g., "Key.A", "Key.D0" for digit 0, etc.)
         if (keyStr.StartsWith("Key."))
         {
-            string keyPart = keyStr.Substring(4); // Remove "Key." prefix
+            // Use range operator instead of Substring to avoid allocation
+            string keyPart = keyStr[4..]; // Remove "Key." prefix
             
             // Handle digit keys (D0-D9)
             if (keyPart.StartsWith("D") && keyPart.Length == 2 && char.IsDigit(keyPart[1]))
@@ -904,7 +910,7 @@ public class IntroScreen : View
                     }
                     else if (_initialsInput.Length == 1)
                     {
-                        initialsPart = _initialsInput + "▊"; // Caret at second position
+                        initialsPart = $"{_initialsInput}▊"; // Caret at second position
                     }
                     else
                     {
@@ -1050,25 +1056,25 @@ public class IntroScreen : View
         }
         
         string serverUrl = _config.GetServerUrl();
-        string statusText = $"Server: {serverUrl}";
-        
-        // Determine color based on status
+        // Avoid string concatenation - build status text efficiently
         Color statusColor;
+        string statusSuffix;
         if (_serverStatus == true)
         {
             statusColor = Color.Green;
-            statusText += " [ONLINE]";
+            statusSuffix = " [ONLINE]";
         }
         else if (_serverStatus == false)
         {
             statusColor = Color.Red;
-            statusText += " [OFFLINE]";
+            statusSuffix = " [OFFLINE]";
         }
         else
         {
             statusColor = Color.Gray;
-            statusText += " [CHECKING...]";
+            statusSuffix = " [CHECKING...]";
         }
+        string statusText = $"Server: {serverUrl}{statusSuffix}";
         
         // Draw at bottom of screen (one row up from absolute bottom)
         int statusY = height - 2;
@@ -1409,8 +1415,8 @@ public class IntroScreen : View
         Move(promptX, promptY);
         this.AddString(prompt);
         
-        // Draw input with caret
-        string inputDisplay = _startingLevelInput + "▊";
+        // Draw input with caret - use string interpolation instead of concatenation
+        string inputDisplay = $"{_startingLevelInput}▊";
         int inputX = (width - inputDisplay.Length) / 2;
         int inputY = promptY + 2;
         
@@ -1449,8 +1455,8 @@ public class IntroScreen : View
         Move(promptX, promptY);
         this.AddString(prompt);
         
-        // Draw input with caret
-        string inputDisplay = _playerCountInput + "▊";
+        // Draw input with caret - use string interpolation instead of concatenation
+        string inputDisplay = $"{_playerCountInput}▊";
         int inputX = (width - inputDisplay.Length) / 2;
         int inputY = promptY + 2;
         
@@ -1493,7 +1499,7 @@ public class IntroScreen : View
         string inputDisplay = _gameIdInput.PadRight(6, '_');
         if (_gameIdInput.Length < 6)
         {
-            inputDisplay = _gameIdInput + "▊" + new string('_', 5 - _gameIdInput.Length);
+            inputDisplay = $"{_gameIdInput}▊{new string('_', 5 - _gameIdInput.Length)}";
         }
         int inputX = (width - inputDisplay.Length) / 2;
         int inputY = promptY + 2;
@@ -1621,11 +1627,13 @@ public class IntroScreen : View
         {
             if (_editingServerAddress && _serverAddressInput.Length > 0)
             {
-                _serverAddressInput = _serverAddressInput.Substring(0, _serverAddressInput.Length - 1);
+                // Use range operator instead of Substring to avoid allocation
+                _serverAddressInput = _serverAddressInput[..^1];
             }
             else if (!_editingServerAddress && _serverPortInput.Length > 0)
             {
-                _serverPortInput = _serverPortInput.Substring(0, _serverPortInput.Length - 1);
+                // Use range operator instead of Substring to avoid allocation
+                _serverPortInput = _serverPortInput[..^1];
             }
             return;
         }
