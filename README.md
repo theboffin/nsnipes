@@ -158,7 +158,7 @@ So what's left to do:
   - ❌ Level progression synchronization in multiplayer (currently host-only)
 - Technical Debt
   - ✅ Update Terminal.Gui library to latest develop branch (v2.0.0-develop.4828 - completed!)
-  - ✅ Upgrade to .NET 10 (completed for NSnipes game client)
+  - ✅ Upgrade to .NET 10 (completed for both NSnipes and NSnipes.GrpcServer)
   - ⚠️ Fix global [ESC] key handling across all screens
   - ⚠️ Extensive testing needed for multiplayer stability
 
@@ -340,7 +340,7 @@ So what's left to do:
   - Fixed visibility management for view hierarchy (child views only render when parent is visible)
   - Added ANSI escape sequences for cursor visibility control
   - Created `ViewHelpers` extension methods for common drawing operations
-- **Upgraded to .NET 10**: NSnipes game client now targets .NET 10 (NSnipes.GrpcServer remains on .NET 9)
+- **Upgraded to .NET 10**: Both NSnipes game client and NSnipes.GrpcServer now target .NET 10
 - **Zero Compilation Warnings**: All deprecated API usage eliminated, clean build with no warnings
 - **Performance Optimizations**: Optimized redraw triggers to only update when game state changes (improved from 3 FPS to 30-60 FPS)
 - **Input System Fixes**: 
@@ -683,8 +683,7 @@ So what's left to do:
 This project is built with the following dependencies:
 
 ### Runtime Requirements
-- **.NET 10** - Required for NSnipes game client
-- **.NET 9** - Required for NSnipes.GrpcServer (multiplayer server)
+- **.NET 10** - Required for both NSnipes game client and NSnipes.GrpcServer
 
 ### NuGet Packages
 - **Terminal.Gui** (v2.0.0-develop.4828) - Modern console UI library https://github.com/gui-cs/Terminal.Gui
