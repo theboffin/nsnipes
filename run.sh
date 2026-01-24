@@ -12,8 +12,8 @@ if [ "$1" == "-build" ]; then
     BUILD_FLAG=true
 fi
 
-echo "🎮 NSnipes - Run"
-echo "================"
+echo "NSnipes - Run"
+echo "============="
 echo ""
 
 # Change to the script's directory
@@ -21,23 +21,23 @@ cd "$(dirname "$0")"
 
 # Build the project only if -build flag is passed
 if [ "$BUILD_FLAG" == true ]; then
-    echo "📦 Building project..."
-    dotnet build NSnipes.sln --configuration Debug
+    echo "Building NSnipes client..."
+    dotnet build NSnipes/NSnipes.csproj --configuration Debug --no-dependencies
 
     if [ $? -ne 0 ]; then
-        echo "❌ Build failed!"
+        echo "Build failed!"
         exit 1
     fi
 
     echo ""
-    echo "✅ Build successful!"
+    echo "Build successful!"
     echo ""
 else
-    echo "⏭️  Skipping build (use -build flag to rebuild)"
+    echo "Skipping build (use -build flag to rebuild)"
     echo ""
 fi
 
-echo "🚀 Starting NSnipes..."
+echo "Starting NSnipes..."
 echo ""
 
 # Run the project (without building if -build flag not passed)

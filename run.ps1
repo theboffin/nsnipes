@@ -22,8 +22,8 @@ Set-Location $scriptDir
 
 # Build the project only if -build flag is passed
 if ($BUILD_FLAG) {
-    Write-Host "Building project..."
-    dotnet build NSnipes.sln --configuration Debug
+    Write-Host "Building NSnipes client..."
+    dotnet build NSnipes/NSnipes.csproj --configuration Debug --no-dependencies
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Build failed!"
