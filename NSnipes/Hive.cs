@@ -18,7 +18,7 @@ public class Hive
     public const int Width = 2;
     public const int Height = 2;
     
-    public Hive(int x, int y, int snipesPerHive)
+    public Hive(int x, int y, int snipesPerHive, DateTime? initialSpawnTime = null)
     {
         X = x;
         Y = y;
@@ -29,7 +29,7 @@ public class Hive
         // If odd number, give the extra to type A
         if (snipesPerHive % 2 == 1)
             SnipesType2++;
-        LastSpawnTime = DateTime.Now;
+        LastSpawnTime = initialSpawnTime ?? DateTime.Now;
     }
     
     public bool CanSpawnSnipe()
@@ -56,7 +56,7 @@ public class Hive
         return 'A'; // Default
     }
     
-    public void SpawnSnipe()
+    public void SpawnSnipe(DateTime? spawnTime = null)
     {
         if (SnipesRemaining > 0)
         {
@@ -66,7 +66,7 @@ public class Hive
             else
                 SnipesType3--;
             SnipesRemaining--;
-            LastSpawnTime = DateTime.Now;
+            LastSpawnTime = spawnTime ?? DateTime.Now;
         }
     }
 }

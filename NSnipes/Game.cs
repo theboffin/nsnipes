@@ -38,6 +38,9 @@ public class Game : Window
     private double _currentFPS = 0.0;
     private readonly Queue<double> _fpsHistory = new Queue<double>();
     private const int FpsHistorySize = 10; // Average over last 10 frames
+    
+    // Cached DateTime for current frame/update cycle to avoid excessive DateTime.Now calls
+    private DateTime _currentFrameTime = DateTime.Now;
 
     // Intro screen
     private IntroScreen _introScreen;
@@ -180,6 +183,9 @@ public class Game : Window
         // Timer for player animation, movement, and initial map draw (40ms for more responsive movement)
         _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(40), () =>
         {
+            // Cache DateTime.Now at start of update cycle
+            _currentFrameTime = DateTime.Now;
+            
             if (!_introScreen.IsActive && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_mapDrawn)
             {
                 _mapDrawn = true;
@@ -223,6 +229,9 @@ public class Game : Window
         // Separate timer for bullet updates (10ms for smooth movement)
         _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(10), () =>
         {
+            // Cache DateTime.Now at start of update cycle
+            _currentFrameTime = DateTime.Now;
+            
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey && !_introScreen.IsActive)
             {
                 // Check if window dimensions have changed (e.g., from resize) - check frequently for responsive resize
@@ -262,11 +271,14 @@ public class Game : Window
         // This ensures other players can see this player even when stationary
         _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
         {
+            // Cache DateTime.Now at start of update cycle
+            _currentFrameTime = DateTime.Now;
+            
             if (_isMultiplayer && _gameSession != null && _gameSession.Status == GameSessionStatus.Playing && 
                 _grpcClient != null && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver)
             {
                 // Force position publish by resetting throttle - this ensures position is sent every 200ms
-                _lastPositionPublish = DateTime.Now.AddMilliseconds(-100); // Reset throttle to allow publish
+                _lastPositionPublish = _currentFrameTime.AddMilliseconds(-100); // Reset throttle to allow publish
                 PublishPlayerPosition();
             }
             return true;
@@ -275,6 +287,9 @@ public class Game : Window
         // Timer for snipe spawning and movement (200ms) - only host runs this
         _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
         {
+            // Cache DateTime.Now at start of update cycle
+            _currentFrameTime = DateTime.Now;
+            
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
                 // Only host spawns and updates snipes - clients receive updates via gRPC
@@ -393,7 +408,7 @@ public class Game : Window
         if (movementKeyPressed && normalizedKey != null)
         {
             // Update key state - mark this key as currently pressed with current time
-            _pressedKeys[normalizedKey] = DateTime.Now;
+            _pressedKeys[normalizedKey] = _currentFrameTime;
             
             // If a movement key was just pressed, immediately process movement
             // This provides instant response when changing directions
@@ -484,7 +499,7 @@ public class Game : Window
             if (shouldFire && (velX != 0 || velY != 0))
             {
                 string? playerId = _gameSession?.PlayerId;
-                var bullet = new Bullet(startX, startY, velX, velY, playerId: playerId);
+                var bullet = new Bullet(startX, startY, velX, velY, playerId: playerId, createdAt: _currentFrameTime);
                 _bullets.Add(bullet);
                 
                 // Publish bullet fired in multiplayer
@@ -509,13 +524,12 @@ public class Game : Window
 
         // Clean up old key presses (keys not seen recently are considered released)
         // Use a more aggressive cleanup to detect key releases faster
-        DateTime now = DateTime.Now;
         var keysToRemove = new List<string>();
         foreach (var kvp in _pressedKeys)
         {
             // Remove keys that haven't been refreshed recently
             // This detects when a key is released (no more key repeat events)
-            if ((now - kvp.Value).TotalMilliseconds > KeyRepeatThresholdMs)
+            if ((_currentFrameTime - kvp.Value).TotalMilliseconds > KeyRepeatThresholdMs)
             {
                 keysToRemove.Add(kvp.Key);
             }
@@ -764,8 +778,7 @@ public class Game : Window
     
     private void UpdateFrameRate()
     {
-        DateTime now = DateTime.Now;
-        double elapsedMs = (now - _lastFrameTime).TotalMilliseconds;
+        double elapsedMs = (_currentFrameTime - _lastFrameTime).TotalMilliseconds;
         
         if (elapsedMs > 0)
         {
@@ -786,7 +799,7 @@ public class Game : Window
             }
         }
         
-        _lastFrameTime = now;
+        _lastFrameTime = _currentFrameTime;
     }
 
     private void DrawPlayerWithClearing()
@@ -847,7 +860,7 @@ public class Game : Window
             var bullet = _bullets[i];
 
             // Check if bullet has expired (older than 2 seconds)
-            double ageSeconds = (DateTime.Now - bullet.CreatedAt).TotalSeconds;
+            double ageSeconds = (_currentFrameTime - bullet.CreatedAt).TotalSeconds;
             if (ageSeconds >= Bullet.LifetimeSeconds)
             {
                 // Clear the expired bullet from screen before removing
@@ -1404,11 +1417,8 @@ public class Game : Window
             }
         }
 
-        // Cache DateTime to avoid multiple system calls
-        if ((DateTime.Now - _cachedDateTime).TotalMilliseconds > 10)
-        {
-            _cachedDateTime = DateTime.Now;
-        }
+        // Use cached frame time instead of calling DateTime.Now
+        _cachedDateTime = _currentFrameTime;
 
         // Flash between bright red and red based on time
         bool isBright = (_cachedDateTime.Millisecond / 250) % 2 == 0;
@@ -1447,11 +1457,8 @@ public class Game : Window
         int mapOffsetX = _player.X - (frameWidth / 2);
         int mapOffsetY = _player.Y - (frameHeight / 2);
 
-        // Cache DateTime to avoid multiple system calls
-        if ((DateTime.Now - _cachedDateTime).TotalMilliseconds > 10)
-        {
-            _cachedDateTime = DateTime.Now;
-        }
+        // Use cached frame time instead of calling DateTime.Now
+        _cachedDateTime = _currentFrameTime;
 
         long totalMs = _cachedDateTime.Ticks / TimeSpan.TicksPerMillisecond;
 
@@ -1552,7 +1559,7 @@ public class Game : Window
                 continue;
 
             // Random chance to spawn (roughly every 3 seconds, but randomized)
-            int timeSinceLastSpawn = (int)(DateTime.Now - hive.LastSpawnTime).TotalMilliseconds;
+            int timeSinceLastSpawn = (int)(_currentFrameTime - hive.LastSpawnTime).TotalMilliseconds;
             if (timeSinceLastSpawn >= Hive.SpawnIntervalMs + Random.Shared.Next(-1000, 1000))
             {
                 // Spawn snipe at hive position (center of 2x2 hive)
@@ -1577,7 +1584,7 @@ public class Game : Window
                 }
 
                 _snipes.Add(snipe);
-                hive.SpawnSnipe();
+                hive.SpawnSnipe(_currentFrameTime);
                 // Note: SnipesUndestroyed doesn't change when spawning - the snipe just moves from "in hive" to "spawned"
                 // It only decreases when a snipe is killed
                 
@@ -1729,7 +1736,7 @@ public class Game : Window
             }
 
             // Check if it's time to move
-            int timeSinceLastMove = (int)(DateTime.Now - snipe.LastMoveTime).TotalMilliseconds;
+            int timeSinceLastMove = (int)(_currentFrameTime - snipe.LastMoveTime).TotalMilliseconds;
             if (timeSinceLastMove < Snipe.MoveIntervalMs)
                 continue;
 
@@ -1803,7 +1810,7 @@ public class Game : Window
             if (possibleDirections.Count == 0)
             {
                 // Can't move in any direction - stay in place but keep trying
-                snipe.LastMoveTime = DateTime.Now;
+                snipe.LastMoveTime = _currentFrameTime;
                 continue;
             }
 
@@ -1872,7 +1879,7 @@ public class Game : Window
             snipe.Y = (newSnipeY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
             snipe.DirectionX = chosenDirection.dx;
             snipe.DirectionY = chosenDirection.dy;
-            snipe.LastMoveTime = DateTime.Now;
+            snipe.LastMoveTime = _currentFrameTime;
 
             // Check for collision with other snipes
             for (int j = 0; j < _snipes.Count; j++)
@@ -2639,7 +2646,7 @@ public class Game : Window
         for (int i = 0; i < hiveCount; i++)
         {
             var (x, y) = FindRandomValidHivePosition();
-            _hives.Add(new Hive(x, y, snipesPerHive));
+            _hives.Add(new Hive(x, y, snipesPerHive, _currentFrameTime));
         }
     }
 
@@ -2930,11 +2937,8 @@ public class Game : Window
         int topLeftCol = frameWidth / 2;
         int topLeftRow = (frameHeight / 2) + StatusBarHeight;
 
-        // Cache DateTime to avoid multiple system calls
-        if ((DateTime.Now - _cachedDateTime).TotalMilliseconds > 10)
-        {
-            _cachedDateTime = DateTime.Now;
-        }
+        // Use cached frame time instead of calling DateTime.Now
+        _cachedDateTime = _currentFrameTime;
 
         var eyes = _cachedDateTime.Millisecond < 500 ? "ÔÔ" : "OO";
         var mouth = _cachedDateTime.Millisecond < 500 ? "◄►" : "◂▸";
@@ -2989,7 +2993,7 @@ public class Game : Window
                 // Draw eyes (same as local player but different color)
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY >= 0 && viewportY < frameHeight)
                 {
-                    var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
+                    var eyes = _currentFrameTime.Millisecond < 500 ? "ÔÔ" : "OO";
                     Move(viewportX, viewportY + StatusBarHeight);
                     this.AddString(eyes);
                 }
@@ -2997,7 +3001,7 @@ public class Game : Window
                 // Draw mouth
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY + 1 >= 0 && viewportY + 1 < frameHeight)
                 {
-                    var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
+                    var mouth = _currentFrameTime.Millisecond < 500 ? "◄►" : "◂▸";
                     Move(viewportX, viewportY + 1 + StatusBarHeight);
                     this.AddString(mouth);
                 }
@@ -3118,7 +3122,7 @@ public class Game : Window
                 // Draw eyes (same as local player but different color)
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY >= 0 && viewportY < frameHeight)
                 {
-                    var eyes = DateTime.Now.Millisecond < 500 ? "ÔÔ" : "OO";
+                    var eyes = _currentFrameTime.Millisecond < 500 ? "ÔÔ" : "OO";
                     Move(viewportX, viewportY + StatusBarHeight);
                     this.AddString(eyes);
                 }
@@ -3126,7 +3130,7 @@ public class Game : Window
                 // Draw mouth
                 if (viewportX >= 0 && viewportX + 1 < frameWidth && viewportY + 1 >= 0 && viewportY + 1 < frameHeight)
                 {
-                    var mouth = DateTime.Now.Millisecond < 500 ? "◄►" : "◂▸";
+                    var mouth = _currentFrameTime.Millisecond < 500 ? "◄►" : "◂▸";
                     Move(viewportX, viewportY + 1 + StatusBarHeight);
                     this.AddString(mouth);
                 }
@@ -3608,7 +3612,7 @@ public class Game : Window
             int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(snapshot.Level);
             foreach (var hiveState in snapshot.Hives)
             {
-                var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive)
+                var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive, _currentFrameTime)
                 {
                     Hits = hiveState.Hits,
                     IsDestroyed = hiveState.IsDestroyed,
@@ -3794,7 +3798,7 @@ public class Game : Window
         if (bulletMsg.Action == "fired")
         {
             // Add remote bullet to our list
-            var bullet = new Bullet(bulletMsg.X, bulletMsg.Y, bulletMsg.VelocityX, bulletMsg.VelocityY, bulletMsg.BulletId, playerId);
+            var bullet = new Bullet(bulletMsg.X, bulletMsg.Y, bulletMsg.VelocityX, bulletMsg.VelocityY, bulletMsg.BulletId, playerId, _currentFrameTime);
             _bullets.Add(bullet);
         }
         else if (bulletMsg.Action == "updated")
@@ -3887,7 +3891,7 @@ public class Game : Window
         // Throttle position updates to avoid flooding, but allow more frequent updates
         // Reduce throttling to 20ms for smoother movement
         // Note: The periodic timer (200ms) will ensure position is sent even if player isn't moving
-        if ((DateTime.Now - _lastPositionPublish).TotalMilliseconds < 20)
+        if ((_currentFrameTime - _lastPositionPublish).TotalMilliseconds < 20)
             return;
         
         _positionSequence++;
@@ -3908,7 +3912,7 @@ public class Game : Window
         
         // Use fire-and-forget for position updates
         _ = _grpcClient.SendGameMessageAsync(gameMessage);
-        _lastPositionPublish = DateTime.Now;
+        _lastPositionPublish = _currentFrameTime;
     }
     
     private void PublishBulletUpdate(Bullet bullet, string action, string? hitType = null, string? hitTargetId = null)
@@ -3942,7 +3946,7 @@ public class Game : Window
         if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
             return;
         
-        int elapsed = (int)(DateTime.UtcNow - _gameSession.CreatedAt).TotalSeconds;
+        int elapsed = (int)(_currentFrameTime - _gameSession.CreatedAt).TotalSeconds;
         int timeRemaining = Math.Max(0, 60 - elapsed);
         
         var gameMessage = new GameMessage
@@ -3975,7 +3979,7 @@ public class Game : Window
             return;
         
         _gameSession.Status = GameSessionStatus.Starting;
-        _gameSession.StartTime = DateTime.UtcNow;
+        _gameSession.StartTime = _currentFrameTime;
         
         // Initialize network players from game session
         foreach (var playerInfo in _gameSession.Players)

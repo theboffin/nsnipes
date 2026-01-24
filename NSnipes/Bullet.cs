@@ -13,7 +13,7 @@ public class Bullet
     public DateTime CreatedAt { get; set; }
     public const double LifetimeSeconds = 2.0; // Bullets expire after 2 seconds
 
-    public Bullet(double startX, double startY, double velocityX, double velocityY, string? bulletId = null, string? playerId = null)
+    public Bullet(double startX, double startY, double velocityX, double velocityY, string? bulletId = null, string? playerId = null, DateTime? createdAt = null)
     {
         BulletId = bulletId ?? $"bullet_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString().Substring(0, 8)}";
         PlayerId = playerId ?? "";
@@ -23,7 +23,7 @@ public class Bullet
         PreviousY = startY;
         VelocityX = velocityX;
         VelocityY = velocityY;
-        CreatedAt = DateTime.Now;
+        CreatedAt = createdAt ?? DateTime.Now;
     }
 
     public void Update()
