@@ -1,38 +1,23 @@
 namespace NSnipes;
 
-public class Snipe
+public class Snipe(int x, int y, char type, int directionX = 0, int directionY = 0)
 {
     public const char SnipeACharacter = '@';
     public const char SnipeBCharacter = '@';
     
-    public int X { get; set; }
-    public int Y { get; set; }
-    public int PreviousX { get; set; } // For clearing previous position
-    public int PreviousY { get; set; } // For clearing previous position
-    public int PreviousDirectionX { get; set; } // For clearing previous arrow position
-    public int PreviousDirectionY { get; set; } // For clearing previous arrow position
-    public char Type { get; set; } // 'A' or 'B'
-    public int DirectionX { get; set; } // -1, 0, or 1
-    public int DirectionY { get; set; } // -1, 0, or 1
+    public int X { get; set; } = x;
+    public int Y { get; set; } = y;
+    public int PreviousX { get; set; } = x; // For clearing previous position
+    public int PreviousY { get; set; } = y; // For clearing previous position
+    public int PreviousDirectionX { get; set; } = 0; // For clearing previous arrow position
+    public int PreviousDirectionY { get; set; } = 0; // For clearing previous arrow position
+    public char Type { get; set; } = type; // 'A' or 'B'
+    public int DirectionX { get; set; } = directionX; // -1, 0, or 1
+    public int DirectionY { get; set; } = directionY; // -1, 0, or 1
     public bool IsAlive { get; set; } = true;
-    public DateTime LastMoveTime { get; set; }
-    public string SnipeId { get; set; } = ""; // Unique identifier for network sync
+    public DateTime LastMoveTime { get; set; } = DateTime.Now;
+    public string SnipeId { get; set; } = $"snipe_{x}_{y}_{DateTime.UtcNow.Ticks}"; // Unique identifier for network sync
     public const int MoveIntervalMs = 200; // Snipes move every 200ms
-    
-    public Snipe(int x, int y, char type, int directionX = 0, int directionY = 0)
-    {
-        X = x;
-        Y = y;
-        PreviousX = x;
-        PreviousY = y;
-        PreviousDirectionX = 0;
-        PreviousDirectionY = 0;
-        Type = type; // 'A' or 'B'
-        LastMoveTime = DateTime.Now;
-        DirectionX = directionX;
-        DirectionY = directionY;
-        SnipeId = $"snipe_{x}_{y}_{DateTime.UtcNow.Ticks}";
-    }
     
     public char GetDisplayChar()
     {

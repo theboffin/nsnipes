@@ -48,7 +48,7 @@ public class IntroScreen : View
     
     // Menu state
     private int _selectedMenuIndex = 0;
-    private readonly string[] _menuItems = { "Start a New Game", "Join an Existing Game", "Initials", "Configure Server", "Exit" };
+    private readonly string[] _menuItems = ["Start a New Game", "Join an Existing Game", "Initials", "Configure Server", "Exit"];
     private bool _enteringInitials = false;
     private string _initialsInput = "";
     
@@ -86,8 +86,7 @@ public class IntroScreen : View
     private Func<int, int, char>? _getMapCharAtPosition; // Callback to get map character during clearing effect
     
     // NSNIPES banner definition (7 rows tall, each letter is 7 characters wide)
-    private static readonly string[] BannerN = new[]
-    {
+    private static readonly string[] BannerN = [
         "█     █",
         "██    █",
         "█ █   █",
@@ -95,10 +94,9 @@ public class IntroScreen : View
         "█   █ █",
         "█    ██",
         "█     █"
-    };
+    ];
     
-    private static readonly string[] BannerS = new[]
-    {
+    private static readonly string[] BannerS = [
         " █████ ",
         "█      ",
         "█      ",
@@ -106,10 +104,9 @@ public class IntroScreen : View
         "      █",
         "      █",
         " █████ "
-    };
+    ];
     
-    private static readonly string[] BannerI = new[]
-    {
+    private static readonly string[] BannerI = [
         "███████",
         "   █   ",
         "   █   ",
@@ -117,10 +114,9 @@ public class IntroScreen : View
         "   █   ",
         "   █   ",
         "███████"
-    };
+    ];
     
-    private static readonly string[] BannerP = new[]
-    {
+    private static readonly string[] BannerP = [
         "██████ ",
         "█     █",
         "█     █",
@@ -128,10 +124,9 @@ public class IntroScreen : View
         "█      ",
         "█      ",
         "█      "
-    };
+    ];
     
-    private static readonly string[] BannerE = new[]
-    {
+    private static readonly string[] BannerE = [
         "███████",
         "█      ",
         "█      ",
@@ -139,7 +134,7 @@ public class IntroScreen : View
         "█      ",
         "█      ",
         "███████"
-    };
+    ];
     
     public IntroScreen(GameConfig config, GameState gameState)
     {

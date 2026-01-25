@@ -8,6 +8,9 @@ using System.Linq;
 using System.Text.Json;
 using NSnipes.GrpcServer;
 using DrawingAttribute = Terminal.Gui.Drawing.Attribute;
+using GameMessage = NSnipes.GrpcServer.GameMessage;
+using PlayerPositionUpdate = NSnipes.GrpcServer.PlayerPositionUpdate;
+using BulletUpdate = NSnipes.GrpcServer.BulletUpdate;
 
 namespace NSnipes;
 
@@ -627,6 +630,7 @@ public class Game : Window
                            string[] map, int frameWidth, int frameHeight)
     {
         // Helper function to check if a cell is walkable (space)
+        // Note: Cannot use 'in' parameter in local function, so map is passed by value
         bool IsWalkable(int row, int col)
         {
             if (row < 0 || row >= frameHeight || col < 0 || col >= frameWidth)
@@ -901,7 +905,7 @@ public class Game : Window
     /// <summary>
     /// Clears a bullet at the specified viewport position
     /// </summary>
-    private void ClearBulletAtPosition(int viewportX, int viewportY, int frameWidth, int frameHeight, string[] map)
+    private void ClearBulletAtPosition(int viewportX, int viewportY, int frameWidth, int frameHeight, in string[] map)
     {
         if (viewportX >= 0 && viewportX < frameWidth &&
             viewportY >= 0 && viewportY < frameHeight &&
@@ -919,7 +923,7 @@ public class Game : Window
     /// Clears bullet at current position and previous position if different
     /// </summary>
     private void ClearBulletAndPreviousPosition(Bullet bullet, int bulletWorldX, int bulletWorldY,
-                                                int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, string[] map)
+                                                int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, in string[] map)
     {
         // Clear bullet at collision point
         int viewportX = bulletWorldX - mapOffsetX;
@@ -1090,7 +1094,7 @@ public class Game : Window
     /// <summary>
     /// Handles bullet expiration - removes expired bullets and clears them from screen
     /// </summary>
-    private bool HandleBulletExpiration(Bullet bullet, int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, string[] map)
+    private bool HandleBulletExpiration(Bullet bullet, int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, in string[] map)
     {
         double ageSeconds = (_currentFrameTime - bullet.CreatedAt).TotalSeconds;
         if (ageSeconds >= Bullet.LifetimeSeconds)
@@ -1317,10 +1321,12 @@ public class Game : Window
                 _cachedMapViewport = null;
                 
                 // Publish bullet hit
+                // Note: Cannot use 'in' parameter in lambda, so bullet is passed by value
+                string bulletId = bullet.BulletId;
                 PublishBulletUpdate(bullet, "hit", "player", networkPlayer.PlayerId);
                 
                 // Remove bullet
-                _bullets.RemoveAll(b => b.BulletId == bullet.BulletId);
+                _bullets.RemoveAll(b => b.BulletId == bulletId);
                 
                 if (networkPlayer.IsLocal)
                 {
@@ -1565,7 +1571,7 @@ public class Game : Window
                 var snipe = new Snipe(snipeX, snipeY, snipeType);
 
                 // Give snipe a random initial direction
-                int[] directions = new int[] { -1, 0, 1 };
+                int[] directions = [-1, 0, 1];
                 snipe.DirectionX = directions[Random.Shared.Next(3)];
                 snipe.DirectionY = directions[Random.Shared.Next(3)];
 

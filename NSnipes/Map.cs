@@ -4,8 +4,7 @@ namespace NSnipes;
 
 public class Map
 {
-    private readonly string[] _map = new string[]
-    {
+    private readonly string[] _map = [
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
@@ -130,7 +129,7 @@ public class Map
 "               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              ",
 "               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              ",
 "               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              "
-    };
+    ];
 
     public string[] FullMap => _map;
     public int MapWidth => _map[0].Length;

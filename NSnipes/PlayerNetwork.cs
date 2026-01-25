@@ -3,12 +3,12 @@ namespace NSnipes;
 /// <summary>
 /// Represents a player in a network game (either local or remote)
 /// </summary>
-public class PlayerNetwork
+public class PlayerNetwork(string playerId, string initials, int playerNumber, bool isLocal)
 {
-    public string PlayerId { get; set; } = "";
-    public string Initials { get; set; } = "";
-    public int PlayerNumber { get; set; }
-    public bool IsLocal { get; set; } = false;
+    public string PlayerId { get; set; } = playerId;
+    public string Initials { get; set; } = initials;
+    public int PlayerNumber { get; set; } = playerNumber;
+    public bool IsLocal { get; set; } = isLocal;
     
     // Position (world coordinates)
     public int X { get; set; }
@@ -26,17 +26,8 @@ public class PlayerNetwork
     public bool IsAlive { get; set; } = true;
     
     // Network sync
-    public DateTime LastPositionUpdate { get; set; }
+    public DateTime LastPositionUpdate { get; set; } = DateTime.Now;
     public int PositionSequence { get; set; } = 0;
-    
-    public PlayerNetwork(string playerId, string initials, int playerNumber, bool isLocal)
-    {
-        PlayerId = playerId;
-        Initials = initials;
-        PlayerNumber = playerNumber;
-        IsLocal = isLocal;
-        LastPositionUpdate = DateTime.Now;
-    }
     
     public void UpdatePosition(int x, int y, int sequence)
     {
