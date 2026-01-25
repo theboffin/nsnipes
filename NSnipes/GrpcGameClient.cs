@@ -22,6 +22,7 @@ public class GrpcGameClient : IDisposable
     
     // Server configuration
     private const string DefaultServer = "http://localhost:5000";
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
     
     public bool IsConnected => _isConnected && _stream != null;
     
@@ -178,7 +179,8 @@ public class GrpcGameClient : IDisposable
                 Initials = initials
             };
             
-            return await _client.JoinGameAsync(request);
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            return await _client.JoinGameAsync(request, cancellationToken: cts.Token).ConfigureAwait(false);
         }
         catch (InvalidOperationException)
         {
@@ -189,6 +191,12 @@ public class GrpcGameClient : IDisposable
         {
             // Re-throw ArgumentException (already logged)
             throw;
+        }
+        catch (OperationCanceledException)
+        {
+            var error = "Join game timed out";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error);
         }
         catch (Grpc.Core.RpcException ex)
         {

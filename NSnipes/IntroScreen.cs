@@ -79,6 +79,8 @@ public class IntroScreen : View
     private bool? _serverStatus = null; // null = unknown, true = online, false = offline
     private DateTime _lastServerCheck = DateTime.MinValue;
     private const int ServerCheckIntervalSeconds = 5; // Check server status every 5 seconds
+    private Task? _serverStatusCheckTask = null;
+    private CancellationTokenSource _serverStatusCheckCancellation = new CancellationTokenSource();
     
     // Dependencies
     private GameConfig _config;
@@ -1047,7 +1049,11 @@ public class IntroScreen : View
         // Check server status periodically
         if ((DateTime.Now - _lastServerCheck).TotalSeconds >= ServerCheckIntervalSeconds)
         {
-            CheckServerStatus();
+            // Only start a new check if one isn't already running
+            if (_serverStatusCheckTask == null || _serverStatusCheckTask.IsCompleted)
+            {
+                CheckServerStatus();
+            }
             _lastServerCheck = DateTime.Now;
         }
         
@@ -1083,11 +1089,15 @@ public class IntroScreen : View
     
     private void CheckServerStatus()
     {
-        // Run async check in background
-        Task.Run(async () =>
+        // Run async check in background with cancellation support
+        _serverStatusCheckTask = Task.Run(async () =>
         {
             try
             {
+                // Check if cancellation was requested before starting
+                if (_serverStatusCheckCancellation.Token.IsCancellationRequested)
+                    return;
+                    
                 string serverUrl = _config.GetServerUrl();
                 
                 // Since server uses HTTP/2 only (no HTTP/1.1 health check endpoint),
@@ -1105,40 +1115,60 @@ public class IntroScreen : View
                     // Use a non-existent game ID to avoid side effects, but test if server responds
                     try
                     {
-                        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                        // Link cancellation tokens
+                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            _serverStatusCheckCancellation.Token,
+                            new CancellationTokenSource(TimeSpan.FromSeconds(1)).Token);
+                            
                         var request = new NSnipes.GrpcServer.JoinRequest
                         {
                             GameId = "TEST_CONNECTION",
                             PlayerId = "TEST",
                             Initials = "TEST"
                         };
-                        await testClient.JoinGameAsync(request, cancellationToken: cts.Token);
+                        await testClient.JoinGameAsync(request, cancellationToken: linkedCts.Token).ConfigureAwait(false);
                         // If we get here, server is responding (even if game doesn't exist)
-                        _serverStatus = true;
+                        if (!_serverStatusCheckCancellation.Token.IsCancellationRequested)
+                        {
+                            _serverStatus = true;
+                        }
                     }
                     catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.NotFound || 
                                                              ex.StatusCode == Grpc.Core.StatusCode.InvalidArgument)
                     {
                         // Server responded (game not found is expected), so server is online
-                        _serverStatus = true;
+                        if (!_serverStatusCheckCancellation.Token.IsCancellationRequested)
+                        {
+                            _serverStatus = true;
+                        }
                     }
                     catch (OperationCanceledException)
                     {
-                        // Timeout - server might be offline or slow
-                        _serverStatus = false;
+                        // Timeout or cancellation - only update status if not cancelled
+                        if (!_serverStatusCheckCancellation.Token.IsCancellationRequested)
+                        {
+                            _serverStatus = false;
+                        }
                     }
                     catch
                     {
-                        // Other errors - assume server is offline
-                        _serverStatus = false;
+                        // Other errors - assume server is offline (only if not cancelled)
+                        if (!_serverStatusCheckCancellation.Token.IsCancellationRequested)
+                        {
+                            _serverStatus = false;
+                        }
                     }
                 }
             }
             catch
             {
-                _serverStatus = false;
+                // Only update status if not cancelled
+                if (!_serverStatusCheckCancellation.Token.IsCancellationRequested)
+                {
+                    _serverStatus = false;
+                }
             }
-        });
+        }, _serverStatusCheckCancellation.Token);
     }
     
     private void DrawIntroPlayer(int width, int height)
@@ -1778,6 +1808,30 @@ public class IntroScreen : View
         SetAttribute(new DrawingAttribute(Color.Gray, Color.Blue));
         Move(instX, instY);
         this.AddString(instructions);
+    }
+    
+    /// <summary>
+    /// Cleanup method to cancel background server status checks
+    /// Should be called when IntroScreen is no longer needed
+    /// </summary>
+    public void Cleanup()
+    {
+        _serverStatusCheckCancellation.Cancel();
+        
+        // Wait for ongoing check to complete (with timeout)
+        if (_serverStatusCheckTask != null && !_serverStatusCheckTask.IsCompleted)
+        {
+            try
+            {
+                _serverStatusCheckTask.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch
+            {
+                // Ignore exceptions during cleanup
+            }
+        }
+        
+        _serverStatusCheckCancellation.Dispose();
     }
 }
 

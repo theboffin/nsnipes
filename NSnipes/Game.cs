@@ -1963,17 +1963,34 @@ public class Game : Window
         const int maxHeatRadius = 20;
 
         // Capture snipe state snapshots before parallel execution to ensure thread safety
+        // Store snipe IDs instead of indices to avoid index invalidation issues
         var snipeSnapshots = new (int x, int y, int dirX, int dirY)[snipesToUpdate.Count];
-        var snipeIndices = new int[snipesToUpdate.Count];
+        var snipeIds = new string[snipesToUpdate.Count];
         for (int i = 0; i < snipesToUpdate.Count; i++)
         {
             int index = snipesToUpdate[i];
+            
+            // Defensive check: verify index is still valid
+            if (index < 0 || index >= _snipes.Count)
+            {
+                ErrorLogger.LogWarning($"Invalid snipe index {index} captured in Phase 2 (snipes count: {_snipes.Count})");
+                snipeIds[i] = ""; // Mark as invalid
+                continue;
+            }
+            
             var snipe = _snipes[index];
+            if (snipe == null)
+            {
+                ErrorLogger.LogWarning($"Null snipe at index {index}");
+                snipeIds[i] = ""; // Mark as invalid
+                continue;
+            }
+            
             snipeSnapshots[i] = (snipe.X, snipe.Y, snipe.DirectionX, snipe.DirectionY);
-            snipeIndices[i] = index;
+            snipeIds[i] = snipe.SnipeId;
         }
 
-        var movementDecisions = new (int index, int newX, int newY, int dirX, int dirY, bool canMove)[snipesToUpdate.Count];
+        var movementDecisions = new (string snipeId, int newX, int newY, int dirX, int dirY, bool canMove)[snipesToUpdate.Count];
         
         // Cache map dimensions for thread safety (read-only properties)
         int mapWidth = _map.MapWidth;
@@ -1986,7 +2003,12 @@ public class Game : Window
             // Sequential processing for small numbers
             for (int i = 0; i < snipesToUpdate.Count; i++)
             {
-                int index = snipeIndices[i];
+                string snipeId = snipeIds[i];
+                
+                // Skip invalid entries
+                if (string.IsNullOrEmpty(snipeId))
+                    continue;
+                    
                 var snapshot = snipeSnapshots[i];
 
                 // Calculate distance to player for heat radius system (using snapshot)
@@ -2021,7 +2043,7 @@ public class Game : Window
                 if (possibleDirections.Count == 0)
                 {
                     // Can't move in any direction - stay in place but keep trying
-                    movementDecisions[i] = (index, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
+                    movementDecisions[i] = (snipeId, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
                     continue;
                 }
 
@@ -2031,7 +2053,7 @@ public class Game : Window
                 // Calculate new position (don't apply yet - that happens sequentially)
                 int newSnipeX = snapshot.x + chosenDirection.dx;
                 int newSnipeY = snapshot.y + chosenDirection.dy;
-                movementDecisions[i] = (index, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
+                movementDecisions[i] = (snipeId, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
             }
         }
         else
@@ -2041,7 +2063,12 @@ public class Game : Window
             {
                 Parallel.For(0, snipesToUpdate.Count, i =>
                 {
-                    int index = snipeIndices[i];
+                    string snipeId = snipeIds[i];
+                    
+                    // Skip invalid entries
+                    if (string.IsNullOrEmpty(snipeId))
+                        return;
+                        
                     var snapshot = snipeSnapshots[i];
 
             // Calculate distance to player for heat radius system (using snapshot)
@@ -2076,7 +2103,7 @@ public class Game : Window
             if (possibleDirections.Count == 0)
             {
                 // Can't move in any direction - stay in place but keep trying
-                movementDecisions[i] = (index, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
+                movementDecisions[i] = (snipeId, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
                 return;
             }
 
@@ -2086,16 +2113,22 @@ public class Game : Window
                     // Calculate new position (don't apply yet - that happens sequentially)
                     int newSnipeX = snapshot.x + chosenDirection.dx;
                     int newSnipeY = snapshot.y + chosenDirection.dy;
-                    movementDecisions[i] = (index, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
+                    movementDecisions[i] = (snipeId, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
                 });
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                ErrorLogger.LogError("Parallel snipe AI calculation failed, falling back to sequential", ex);
                 // If parallel execution fails, fall back to sequential processing
                 // This prevents crashes but may indicate a thread safety issue
                 for (int i = 0; i < snipesToUpdate.Count; i++)
                 {
-                    int index = snipeIndices[i];
+                    string snipeId = snipeIds[i];
+                    
+                    // Skip invalid entries
+                    if (string.IsNullOrEmpty(snipeId))
+                        continue;
+                        
                     var snapshot = snipeSnapshots[i];
 
                     int deltaX = playerX - snapshot.x;
@@ -2121,30 +2154,69 @@ public class Game : Window
 
                     if (possibleDirections.Count == 0)
                     {
-                        movementDecisions[i] = (index, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
+                        movementDecisions[i] = (snipeId, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
                         continue;
                     }
 
                     var chosenDirection = CalculateSnipeDirectionFromSnapshot(snapshot.dirX, snapshot.dirY, possibleDirections, preferredDir, heatFactor);
                     int newSnipeX = snapshot.x + chosenDirection.dx;
                     int newSnipeY = snapshot.y + chosenDirection.dy;
-                    movementDecisions[i] = (index, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
+                    movementDecisions[i] = (snipeId, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
                 }
             }
         }
 
         // Phase 4: Sequentially apply movements and handle collisions (modifies shared state)
+        // Use snipe IDs instead of indices to avoid index invalidation issues
         for (int i = 0; i < movementDecisions.Length; i++)
         {
             var decision = movementDecisions[i];
+            
+            // Skip invalid entries
+            if (string.IsNullOrEmpty(decision.snipeId))
+                continue;
+            
+            // Find snipe by ID instead of using index (more robust)
+            Snipe? snipe = null;
+            int snipeIndex = -1;
+            for (int j = 0; j < _snipes.Count; j++)
+            {
+                if (_snipes[j].SnipeId == decision.snipeId)
+                {
+                    snipe = _snipes[j];
+                    snipeIndex = j;
+                    break;
+                }
+            }
+            
+            // Defensive check: verify snipe was found
+            if (snipe == null)
+            {
+                // Snipe was removed between capture and application, skip
+                continue;
+            }
+            
+            // Verify snipe is still alive
+            if (!snipe.IsAlive)
+            {
+                // Snipe died between capture and application, skip
+                continue;
+            }
+            
             if (!decision.canMove)
             {
                 // Update LastMoveTime even if can't move
-                _snipes[decision.index].LastMoveTime = frameTime;
+                try
+                {
+                    snipe.LastMoveTime = frameTime;
+                }
+                catch (Exception ex)
+                {
+                    ErrorLogger.LogError($"Failed to update LastMoveTime for snipe {decision.snipeId}", ex);
+                    continue;
+                }
                 continue;
             }
-
-            var snipe = _snipes[decision.index];
 
             // Apply movement
             snipe.X = _map.WrapX(decision.newX);
@@ -2153,11 +2225,64 @@ public class Game : Window
             snipe.DirectionY = decision.dirY;
             snipe.LastMoveTime = frameTime;
 
+            // Verify snipe still exists before collision checks (re-find by ID to be safe)
+            snipe = null;
+            snipeIndex = -1;
+            for (int j = 0; j < _snipes.Count; j++)
+            {
+                if (_snipes[j].SnipeId == decision.snipeId)
+                {
+                    snipe = _snipes[j];
+                    snipeIndex = j;
+                    break;
+                }
+            }
+            
+            if (snipe == null || !snipe.IsAlive)
+            {
+                // Snipe was removed or died, skip collision checks
+                continue;
+            }
+            
             // Check for collision with other snipes
-            HandleSnipeSnipeCollisions(snipe, decision.index);
+            HandleSnipeSnipeCollisions(snipe, snipeIndex);
+
+            // Verify snipe still exists after snipe-snipe collision check
+            snipe = null;
+            snipeIndex = -1;
+            for (int j = 0; j < _snipes.Count; j++)
+            {
+                if (_snipes[j].SnipeId == decision.snipeId)
+                {
+                    snipe = _snipes[j];
+                    snipeIndex = j;
+                    break;
+                }
+            }
+            
+            if (snipe == null || !snipe.IsAlive)
+            {
+                continue;
+            }
 
             // Check collision with bullets (snipe moving into bullet)
-            HandleSnipeBulletCollision(snipe, decision.index);
+            HandleSnipeBulletCollision(snipe, snipeIndex);
+
+            // Verify snipe still exists after bullet collision check
+            snipe = null;
+            for (int j = 0; j < _snipes.Count; j++)
+            {
+                if (_snipes[j].SnipeId == decision.snipeId)
+                {
+                    snipe = _snipes[j];
+                    break;
+                }
+            }
+            
+            if (snipe == null || !snipe.IsAlive)
+            {
+                continue;
+            }
 
             // Check collision with player (only if snipe is still alive and game is not over)
             if (snipe.IsAlive && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)

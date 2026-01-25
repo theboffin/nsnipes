@@ -2,7 +2,30 @@ namespace NSnipes;
 
 public class Bullet(double startX, double startY, double velocityX, double velocityY, string? bulletId = null, string? playerId = null, DateTime? createdAt = null)
 {
-    public string BulletId { get; set; } = bulletId ?? $"bullet_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString()[..8]}"; // Unique bullet ID for network sync
+    // Static counter for bullet ID generation (thread-safe)
+    private static long _bulletCounter = 0;
+    private static readonly object _bulletCounterLock = new object();
+    
+    /// <summary>
+    /// Generates a unique bullet ID combining player ID, timestamp, counter, and GUID
+    /// Format: bullet_{playerId}_{timestamp}_{counter}_{guid}
+    /// </summary>
+    private static string GenerateBulletId(string? playerId)
+    {
+        long counter;
+        lock (_bulletCounterLock)
+        {
+            counter = ++_bulletCounter;
+        }
+        
+        string playerPrefix = string.IsNullOrWhiteSpace(playerId) ? "local" : playerId;
+        string timestamp = DateTime.UtcNow.Ticks.ToString();
+        string guid = Guid.NewGuid().ToString("N")[..8]; // 8 hex characters
+        
+        return $"bullet_{playerPrefix}_{timestamp}_{counter}_{guid}";
+    }
+    
+    public string BulletId { get; set; } = bulletId ?? GenerateBulletId(playerId); // Unique bullet ID for network sync
     public string PlayerId { get; set; } = playerId ?? ""; // Player who fired this bullet
     public double X { get; set; } = startX;  // Using double for smooth movement
     public double Y { get; set; } = startY;
@@ -34,4 +57,3 @@ public class Bullet(double startX, double startY, double velocityX, double veloc
         VelocityY = -VelocityY;
     }
 }
-

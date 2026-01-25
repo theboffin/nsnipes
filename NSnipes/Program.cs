@@ -1,7 +1,29 @@
-﻿using NSnipes;
+using NSnipes;
 using Terminal.Gui.App;
 using Terminal.Gui.Views;
 using Terminal.Gui.Input;
+
+// Initialize error logger first
+ErrorLogger.Initialize();
+
+// Set up global unhandled exception handlers
+AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+{
+    if (e.ExceptionObject is Exception ex)
+    {
+        ErrorLogger.LogError("Unhandled exception in AppDomain", ex);
+    }
+    else
+    {
+        ErrorLogger.LogError($"Unhandled exception: {e.ExceptionObject}");
+    }
+};
+
+TaskScheduler.UnobservedTaskException += (sender, e) =>
+{
+    ErrorLogger.LogError("Unobserved task exception", e.Exception);
+    e.SetObserved(); // Mark as handled to prevent app crash
+};
 
 using IApplication app = Application.Create();
 app.Init();
@@ -37,6 +59,9 @@ try
 }
 finally
 {
+    // Shutdown error logger
+    ErrorLogger.Shutdown();
+    
     // Restore cursor visibility when application exits
     try
     {
