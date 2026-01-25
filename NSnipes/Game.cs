@@ -20,12 +20,41 @@ public class Game : Window
     private int _lastFrameHeight;
     private bool _mapDrawn = false;
     private readonly List<Bullet> _bullets = new List<Bullet>(MaxBullets);
-    private readonly List<Hive> _hives = new List<Hive>(15); // Max ~15 hives at higher levels
-    private readonly List<Snipe> _snipes = new List<Snipe>(100); // Can have many active snipes
+    private readonly List<Hive> _hives = new List<Hive>(MaxHives);
+    private readonly List<Snipe> _snipes = new List<Snipe>(MaxSnipes);
     private readonly GameState _gameState = new GameState();
+    
+    // Game configuration constants
     private const int MaxBullets = 10;
+    private const int MaxHives = 15; // Max ~15 hives at higher levels
+    private const int MaxSnipes = 100; // Can have many active snipes
     private const double BulletSpeed = 1.0; // Bullets move 1.0 cell per update (10ms) to ensure proper wall collision
     private const int StatusBarHeight = 2; // First 2 rows reserved for status information
+    
+    // Player constants
+    private const int PlayerWidth = 2; // Player is 2 columns wide [X, X+1]
+    private const int PlayerHeight = 3; // Player is 3 rows tall [Y, Y+1, Y+2]
+    
+    // Score constants
+    private const int SnipeKillScore = 25;
+    private const int HiveBaseScore = 500;
+    private const int SnipePerHiveScore = 25; // Score per unreleased snipe when hive is destroyed
+    
+    // Timer intervals (milliseconds)
+    private const int IntroAnimationIntervalMs = 16; // ~60fps for intro screen animation
+    private const int PlayerAnimationIntervalMs = 40; // More responsive movement
+    private const int BulletUpdateIntervalMs = 10; // Smooth bullet movement
+    private const int HiveAnimationIntervalMs = 75; // Slower color change for better performance
+    private const int PositionPublishPeriodicIntervalMs = 200; // Periodic position publish even when not moving
+    private const int SnipeUpdateIntervalMs = 200; // Snipe spawning and movement
+    private const int StreamConnectionDelayMs = 300; // Delay to ensure stream is fully connected
+    private const int GameStatePublishDelayMs = 200; // Delay to ensure all players' streams are active
+    private const int SubscriptionDelayMs = 100; // Small delay to ensure subscriptions are active
+    
+    // Multiplayer constants
+    private const int MaxNetworkPlayers = 10; // Max 5 players, 10 for safety
+    private const int MaxDirections = 8; // Max 8 directions (cardinal + diagonal)
+    private const int MultiplayerWaitTimeSeconds = 60; // Wait time for players to join
 
     // Performance optimization: Track previous positions to avoid unnecessary redraws
     private int _previousPlayerViewportX = -1;
@@ -49,14 +78,14 @@ public class Game : Window
     // Multiplayer
     private GrpcGameClient? _grpcClient;
     private GameSession? _gameSession;
-    private Dictionary<string, PlayerNetwork> _networkPlayers = new Dictionary<string, PlayerNetwork>(10); // Max 5 players, 10 for safety
+    private Dictionary<string, PlayerNetwork> _networkPlayers = new Dictionary<string, PlayerNetwork>(MaxNetworkPlayers);
     private bool _isMultiplayer = false;
     private int _positionSequence = 0; // Sequence number for position updates
     private DateTime _lastPositionPublish = DateTime.Now;
-    private const int PositionPublishIntervalMs = 20; // Publish position every 20ms when moved for smoother updates
+    private const int PositionPublishThrottleMs = 20; // Publish position every 20ms when moved for smoother updates
 
     // Key state tracking for smooth movement
-    private Dictionary<string, DateTime> _pressedKeys = new Dictionary<string, DateTime>(8); // Max 8 directions (cardinal + diagonal)
+    private Dictionary<string, DateTime> _pressedKeys = new Dictionary<string, DateTime>(MaxDirections);
     private const int KeyRepeatThresholdMs = 60; // Consider key released if not seen in 60ms (reduced for faster response)
 
     public Game(IApplication app)
@@ -169,8 +198,8 @@ public class Game : Window
         // Note: Application.SizeChanging doesn't exist in v2
         // Size changes will be detected in the timers via dimension checks
 
-        // Timer for intro screen animation and clearing effects (16ms for ~60fps)
-        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(16), () =>
+        // Timer for intro screen animation and clearing effects
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(IntroAnimationIntervalMs), () =>
         {
             if (_introScreen.IsActive || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
             {
@@ -180,8 +209,8 @@ public class Game : Window
             return true;
         });
 
-        // Timer for player animation, movement, and initial map draw (40ms for more responsive movement)
-        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(40), () =>
+        // Timer for player animation, movement, and initial map draw
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(PlayerAnimationIntervalMs), () =>
         {
             // Cache DateTime.Now at start of update cycle
             _currentFrameTime = DateTime.Now;
@@ -226,8 +255,8 @@ public class Game : Window
             return true;
         });
 
-        // Separate timer for bullet updates (10ms for smooth movement)
-        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(10), () =>
+        // Separate timer for bullet updates
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(BulletUpdateIntervalMs), () =>
         {
             // Cache DateTime.Now at start of update cycle
             _currentFrameTime = DateTime.Now;
@@ -257,8 +286,8 @@ public class Game : Window
             return true;
         });
 
-        // Separate timer for hive animation (75ms for slower color change and better performance)
-        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(75), () =>
+        // Separate timer for hive animation
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(HiveAnimationIntervalMs), () =>
         {
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
@@ -267,9 +296,9 @@ public class Game : Window
             return true;
         });
         
-        // Periodic position update timer for multiplayer (publish position every 200ms even if not moving)
+        // Periodic position update timer for multiplayer (publish position even if not moving)
         // This ensures other players can see this player even when stationary
-        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(PositionPublishPeriodicIntervalMs), () =>
         {
             // Cache DateTime.Now at start of update cycle
             _currentFrameTime = DateTime.Now;
@@ -277,15 +306,15 @@ public class Game : Window
             if (_isMultiplayer && _gameSession != null && _gameSession.Status == GameSessionStatus.Playing && 
                 _grpcClient != null && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver)
             {
-                // Force position publish by resetting throttle - this ensures position is sent every 200ms
-                _lastPositionPublish = _currentFrameTime.AddMilliseconds(-100); // Reset throttle to allow publish
+                // Force position publish by resetting throttle - this ensures position is sent periodically
+                _lastPositionPublish = _currentFrameTime.AddMilliseconds(-PositionPublishThrottleMs * 5); // Reset throttle to allow publish
                 PublishPlayerPosition();
             }
             return true;
         });
 
-        // Timer for snipe spawning and movement (200ms) - only host runs this
-        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
+        // Timer for snipe spawning and movement - only host runs this
+        _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(SnipeUpdateIntervalMs), () =>
         {
             // Cache DateTime.Now at start of update cycle
             _currentFrameTime = DateTime.Now;
@@ -428,7 +457,7 @@ public class Game : Window
         }
 
         // Handle bullet firing (q, w, e, a, d, z, x, c)
-        // Player is 2 columns wide [X, X+1] and 3 rows tall [Y, Y+1, Y+2]
+        // Player is PlayerWidth columns wide [X, X+1] and PlayerHeight rows tall [Y, Y+1, Y+2]
         if (_bullets.Count < MaxBullets)
         {
             double startX = 0;
@@ -450,13 +479,13 @@ public class Game : Window
                     shouldFire = true;
                     break;
                 case 'W': // Up - fire from top center
-                    startX = _player.X + 0.5;
+                    startX = _player.X + 0.5; // Center of player width
                     startY = _player.Y;
                     velY = -BulletSpeed;
                     shouldFire = true;
                     break;
                 case 'E': // Diagonal right/up - fire from top-right corner
-                    startX = _player.X + 1.0;
+                    startX = _player.X + (PlayerWidth - 1); // Right column
                     startY = _player.Y;
                     velX = BulletSpeed;
                     velY = -BulletSpeed;
@@ -469,27 +498,27 @@ public class Game : Window
                     shouldFire = true;
                     break;
                 case 'D': // Right - fire from right center
-                    startX = _player.X + 1.0;
-                    startY = _player.Y + 1.0;
+                    startX = _player.X + (PlayerWidth - 1); // Right column
+                    startY = _player.Y + 1.0; // Middle row
                     velX = BulletSpeed;
                     shouldFire = true;
                     break;
                 case 'Z': // Diagonal left/down - fire from bottom-left corner
                     startX = _player.X;
-                    startY = _player.Y + 2.0;
+                    startY = _player.Y + (PlayerHeight - 1); // Bottom row
                     velX = -BulletSpeed;
                     velY = BulletSpeed;
                     shouldFire = true;
                     break;
                 case 'X': // Down - fire from bottom center
-                    startX = _player.X + 0.5;
-                    startY = _player.Y + 2.0;
+                    startX = _player.X + 0.5; // Center of player width
+                    startY = _player.Y + (PlayerHeight - 1); // Bottom row
                     velY = BulletSpeed;
                     shouldFire = true;
                     break;
                 case 'C': // Diagonal right/down - fire from bottom-right corner
-                    startX = _player.X + 1.0;
-                    startY = _player.Y + 2.0;
+                    startX = _player.X + (PlayerWidth - 1); // Right column
+                    startY = _player.Y + (PlayerHeight - 1); // Bottom row
                     velX = BulletSpeed;
                     velY = BulletSpeed;
                     shouldFire = true;
@@ -574,8 +603,8 @@ public class Game : Window
                 !IsWalkable(newTopLeftRow, newTopLeftCol + 1) ||
                 !IsWalkable(newTopLeftRow + 1, newTopLeftCol) ||
                 !IsWalkable(newTopLeftRow + 1, newTopLeftCol + 1) ||
-                !IsWalkable(newTopLeftRow + 2, newTopLeftCol) ||
-                !IsWalkable(newTopLeftRow + 2, newTopLeftCol + 1))
+                !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol) ||
+                !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol + 1))
             {
                 return false;
             }
@@ -603,10 +632,10 @@ public class Game : Window
                     int npWorldX = _map.WrapX(networkPlayer.X);
                     int npWorldY = _map.WrapY(networkPlayer.Y);
                     
-                    // Check if new position overlaps with this player (2x3 area)
-                    // Player occupies: [X, X+1] columns, [Y, Y+1, Y+2] rows
-                    if (!(newWorldX + 2 <= npWorldX || newWorldX >= npWorldX + 2 ||
-                          newWorldY + 3 <= npWorldY || newWorldY >= npWorldY + 3))
+                    // Check if new position overlaps with this player
+                    // Player occupies: [X, X+PlayerWidth-1] columns, [Y, Y+PlayerHeight-1] rows
+                    if (!(newWorldX + PlayerWidth <= npWorldX || newWorldX >= npWorldX + PlayerWidth ||
+                          newWorldY + PlayerHeight <= npWorldY || newWorldY >= npWorldY + PlayerHeight))
                     {
                         return false; // Overlaps with another player
                     }
@@ -815,8 +844,8 @@ public class Game : Window
                 _previousPlayerViewportX >= 0 && _previousPlayerViewportX < _cachedMapViewport[_previousPlayerViewportY].Length)
             {
                 SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                // Clear all 6 cells of player (2x3)
-                for (int row = 0; row < 3; row++)
+                // Clear all cells of player (PlayerWidth x PlayerHeight)
+                for (int row = 0; row < PlayerHeight; row++)
                 {
                     for (int col = 0; col < 2; col++)
                     {
@@ -1033,8 +1062,8 @@ public class Game : Window
                     _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
                     _gameState.SnipesUndestroyed--;
-                    _gameState.Score += 25;
-                    _player.Score += 25;
+                    _gameState.Score += SnipeKillScore;
+                    _player.Score += SnipeKillScore;
                     bulletRemoved = true;
                     
                     // Check for level completion (host only in multiplayer)
@@ -1103,8 +1132,8 @@ public class Game : Window
                     _snipes.RemoveAt(j);
                     _bullets.RemoveAt(i);
                     _gameState.SnipesUndestroyed--;
-                    _gameState.Score += 25;
-                    _player.Score += 25;
+                    _gameState.Score += SnipeKillScore;
+                    _player.Score += SnipeKillScore;
                     bulletRemoved = true;
                     
                     // Check for level completion (host only in multiplayer)
@@ -1214,8 +1243,8 @@ public class Game : Window
                             // Kill all unreleased snipes from this hive
                             int unreleasedSnipes = hive.SnipesRemaining;
 
-                            // Add score: 500 for hive + 25 per unreleased snipe
-                            int hiveScore = 500 + (unreleasedSnipes * 25);
+                            // Add score: base score for hive + score per unreleased snipe
+                            int hiveScore = HiveBaseScore + (unreleasedSnipes * SnipePerHiveScore);
                             _gameState.Score += hiveScore;
                             _player.Score += hiveScore;
 
@@ -1263,9 +1292,9 @@ public class Game : Window
             int playerWorldX = _map.WrapX(networkPlayer.X);
             int playerWorldY = _map.WrapY(networkPlayer.Y);
             
-            // Check if bullet is within player's 2x3 area
-            if (bulletWorldX >= playerWorldX && bulletWorldX <= playerWorldX + 1 &&
-                bulletWorldY >= playerWorldY && bulletWorldY <= playerWorldY + 2)
+            // Check if bullet is within player's area (PlayerWidth x PlayerHeight)
+            if (bulletWorldX >= playerWorldX && bulletWorldX <= playerWorldX + (PlayerWidth - 1) &&
+                bulletWorldY >= playerWorldY && bulletWorldY <= playerWorldY + (PlayerHeight - 1))
             {
                 // Bullet hit player
                 networkPlayer.Lives--;
@@ -1551,7 +1580,8 @@ public class Game : Window
 
             // Random chance to spawn (roughly every 3 seconds, but randomized)
             int timeSinceLastSpawn = (int)(_currentFrameTime - hive.LastSpawnTime).TotalMilliseconds;
-            if (timeSinceLastSpawn >= Hive.SpawnIntervalMs + Random.Shared.Next(-1000, 1000))
+            const int HiveSpawnRandomizationMs = 1000; // Randomize spawn time by ±1 second
+            if (timeSinceLastSpawn >= Hive.SpawnIntervalMs + Random.Shared.Next(-HiveSpawnRandomizationMs, HiveSpawnRandomizationMs))
             {
                 // Spawn snipe at hive position (center of 2x2 hive)
                 int snipeX = hive.X + 1; // Center of hive
@@ -1593,13 +1623,11 @@ public class Game : Window
         if (_gameSession == null || _grpcClient == null)
             return;
         
-        var gameMessage = new GameMessage
-        {
-            GameId = _gameSession.GameId,
-            PlayerId = _gameSession.PlayerId,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Snipes = new SnipeUpdates()
-        };
+        var gameMessage = CreateBaseGameMessage();
+        if (gameMessage == null)
+            return;
+        
+        gameMessage.Snipes = new SnipeUpdates();
         gameMessage.Snipes.Updates.Add(new SnipeUpdateInfo
         {
             SnipeId = snipe.SnipeId,
@@ -1610,12 +1638,12 @@ public class Game : Window
             DirectionY = snipe.DirectionY,
             Type = snipe.Type.ToString()
         });
-        _ = _grpcClient.SendGameMessageAsync(gameMessage);
+        SendGameMessage(gameMessage);
     }
     
     private void PublishSnipeUpdates()
     {
-        if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
             return;
         
         // Publish all current snipe positions (periodic update)
@@ -1629,13 +1657,11 @@ public class Game : Window
         
         if (aliveCount > 0)
         {
-            var gameMessage = new GameMessage
-            {
-                GameId = _gameSession.GameId,
-                PlayerId = _gameSession.PlayerId,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Snipes = new SnipeUpdates()
-            };
+            var gameMessage = CreateBaseGameMessage();
+            if (gameMessage == null)
+                return;
+            
+            gameMessage.Snipes = new SnipeUpdates();
             // Pre-allocate capacity for snipe updates
             gameMessage.Snipes.Updates.Capacity = aliveCount;
             
@@ -1654,7 +1680,7 @@ public class Game : Window
                     Type = s.Type.ToString()
                 });
             }
-            _ = _grpcClient.SendGameMessageAsync(gameMessage);
+            SendGameMessage(gameMessage);
         }
     }
 
@@ -1987,8 +2013,8 @@ public class Game : Window
                     _snipes.RemoveAt(i);
                     _bullets.RemoveAt(k);
                     _gameState.SnipesUndestroyed--;
-                    _gameState.Score += 25;
-                    _player.Score += 25;
+                    _gameState.Score += SnipeKillScore;
+                    _player.Score += SnipeKillScore;
                     
                     // Check for level completion (host only in multiplayer)
                     if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
@@ -2042,10 +2068,10 @@ public class Game : Window
 
     private bool CheckSnipePlayerCollision(Snipe snipe)
     {
-        // Check if snipe position overlaps with any part of the player (2x3)
-        // Player occupies: [X, X+1] columns, [Y, Y+1, Y+2] rows
-        return snipe.X >= _player.X && snipe.X <= _player.X + 1 &&
-               snipe.Y >= _player.Y && snipe.Y <= _player.Y + 2;
+        // Check if snipe position overlaps with any part of the player
+        // Player occupies: [X, X+PlayerWidth-1] columns, [Y, Y+PlayerHeight-1] rows
+        return snipe.X >= _player.X && snipe.X <= _player.X + (PlayerWidth - 1) &&
+               snipe.Y >= _player.Y && snipe.Y <= _player.Y + (PlayerHeight - 1);
     }
 
     private void DrawSnipes()
@@ -2472,12 +2498,12 @@ public class Game : Window
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
         {
             // Pick a random position on the map
-            // Player is 2 columns wide, so X must be at least 1 from the right edge
-            // Player is 3 rows tall, so Y must be at least 2 from the bottom edge
-            int x = Random.Shared.Next(0, _map.MapWidth - 1); // -1 because we need 2 columns
-            int y = Random.Shared.Next(0, _map.MapHeight - 2); // -2 because we need 3 rows
+            // Player is PlayerWidth columns wide, so X must be at least (PlayerWidth-1) from the right edge
+            // Player is PlayerHeight rows tall, so Y must be at least (PlayerHeight-1) from the bottom edge
+            int x = Random.Shared.Next(0, _map.MapWidth - (PlayerWidth - 1));
+            int y = Random.Shared.Next(0, _map.MapHeight - (PlayerHeight - 1));
 
-            // Check if all 6 cells (2x3) at this position are walkable
+            // Check if all cells (PlayerWidth x PlayerHeight) at this position are walkable
             if (IsPositionValid(x, y))
             {
                 return (x, y);
@@ -2502,17 +2528,17 @@ public class Game : Window
 
     private bool IsPositionValid(int x, int y)
     {
-        // Check if all 6 cells (2 columns x 3 rows) starting at (x, y) are walkable
-        // Player occupies: columns [x, x+1], rows [y, y+1, y+2]
+        // Check if all cells (PlayerWidth columns x PlayerHeight rows) starting at (x, y) are walkable
+        // Player occupies: columns [x, x+PlayerWidth-1], rows [y, y+PlayerHeight-1]
 
         // Bounds check
-        if (x < 0 || x + 1 >= _map.MapWidth || y < 0 || y + 2 >= _map.MapHeight)
+        if (x < 0 || x + (PlayerWidth - 1) >= _map.MapWidth || y < 0 || y + (PlayerHeight - 1) >= _map.MapHeight)
             return false;
 
-        // Check all 6 cells are spaces (walkable)
-        for (int row = y; row <= y + 2; row++)
+        // Check all cells are spaces (walkable)
+        for (int row = y; row <= y + (PlayerHeight - 1); row++)
         {
-            for (int col = x; col <= x + 1; col++)
+            for (int col = x; col <= x + (PlayerWidth - 1); col++)
             {
                 if (_map.FullMap[row][col] != ' ')
                 {
@@ -2545,8 +2571,8 @@ public class Game : Window
             }
         }
         
-        _player.Lives = 5;
-        _player.Score = 0;
+        _player.Lives = Player.InitialLives;
+        _player.Score = Player.InitialScore;
         _player.IsAlive = true;
         _player.Initials = _config.Initials; // Ensure initials are current
         
@@ -2558,7 +2584,7 @@ public class Game : Window
             currentLevel = 1; // Only reset to 1 if level wasn't set
         }
         _gameState.Level = currentLevel;
-        _gameState.Score = 0;
+        _gameState.Score = Player.InitialScore;
         _gameState.TotalHives = 0;
         _gameState.HivesUndestroyed = 0;
         _gameState.TotalSnipes = 0;
@@ -2726,7 +2752,7 @@ public class Game : Window
             if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host && _grpcClient != null)
             {
                 // Small delay to ensure subscriptions are active
-                _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(100), () =>
+                _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(SubscriptionDelayMs), () =>
                 {
                     PublishGameStateSnapshot();
                     return false; // One-time
@@ -2800,9 +2826,9 @@ public class Game : Window
             }
         }
 
-        // Check that hive doesn't overlap with player (player is 2x3)
-        // Player occupies: columns [player.X, player.X+1], rows [player.Y, player.Y+1, player.Y+2]
-        if (x >= _player.X - 1 && x <= _player.X + 1 && y >= _player.Y - 1 && y <= _player.Y + 2)
+        // Check that hive doesn't overlap with player
+        // Player occupies: columns [player.X, player.X+PlayerWidth-1], rows [player.Y, player.Y+PlayerHeight-1]
+        if (x >= _player.X - 1 && x <= _player.X + PlayerWidth && y >= _player.Y - 1 && y <= _player.Y + PlayerHeight)
         {
             return false;
         }
@@ -2943,9 +2969,9 @@ public class Game : Window
             int viewportX = frameWidth / 2 + deltaX;
             int viewportY = frameHeight / 2 + deltaY;
             
-            // Only draw if within viewport (2x3 player area)
-            if (viewportX + 2 > 0 && viewportX < frameWidth &&
-                viewportY + 3 > 0 && viewportY < frameHeight)
+            // Only draw if within viewport (PlayerWidth x PlayerHeight player area)
+            if (viewportX + PlayerWidth > 0 && viewportX < frameWidth &&
+                viewportY + PlayerHeight > 0 && viewportY < frameHeight)
             {
                 // Draw remote player (different color to distinguish from local)
                 SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
@@ -3035,7 +3061,7 @@ public class Game : Window
                 int prevViewportX = frameWidth / 2 + prevDeltaX;
                 int prevViewportY = frameHeight / 2 + prevDeltaY;
                 
-                // Clear previous position (2x3 area) - but only if it's different from current
+                // Clear previous position (PlayerWidth x PlayerHeight area) - but only if it's different from current
                 int currentViewportX = frameWidth / 2 + deltaX;
                 int currentViewportY = frameHeight / 2 + deltaY;
                 
@@ -3069,9 +3095,9 @@ public class Game : Window
             int viewportX = frameWidth / 2 + deltaX;
             int viewportY = frameHeight / 2 + deltaY;
             
-            // Only draw if within viewport (2x3 player area)
-            if (viewportX + 2 > 0 && viewportX < frameWidth &&
-                viewportY + 3 > 0 && viewportY < frameHeight)
+            // Only draw if within viewport (PlayerWidth x PlayerHeight player area)
+            if (viewportX + PlayerWidth > 0 && viewportX < frameWidth &&
+                viewportY + PlayerHeight > 0 && viewportY < frameHeight)
             {
                 // Draw remote player (different color to distinguish from local)
                 SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
@@ -3382,7 +3408,7 @@ public class Game : Window
                 {
                     // Send game state snapshot to the new player so they can see hives and other players
                     // Use a small delay to ensure the player's stream is fully connected
-                    _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(300), () =>
+                    _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(StreamConnectionDelayMs), () =>
                     {
                         // Always send game state snapshot when a player joins
                         // This includes hives (if game has started) and all player positions
@@ -3488,7 +3514,7 @@ public class Game : Window
                 // For clients, publish initial position after game starts so host can see them
                 if (_gameSession.Role == GameSessionRole.Client)
                 {
-                    _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
+                    _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(GameStatePublishDelayMs), () =>
                     {
                         PublishPlayerPosition();
                         return false; // One-time
@@ -3921,6 +3947,33 @@ public class Game : Window
     
     // Legacy methods removed - using gRPC HandleBulletMessageGrpc now
     
+    /// <summary>
+    /// Creates a base GameMessage with common fields (GameId, PlayerId, Timestamp)
+    /// </summary>
+    private GameMessage? CreateBaseGameMessage(string? playerId = null)
+    {
+        if (_gameSession == null || _grpcClient == null)
+            return null;
+        
+        return new GameMessage
+        {
+            GameId = _gameSession.GameId,
+            PlayerId = playerId ?? _gameSession.PlayerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+    }
+    
+    /// <summary>
+    /// Sends a GameMessage using fire-and-forget pattern
+    /// </summary>
+    private void SendGameMessage(GameMessage? gameMessage)
+    {
+        if (gameMessage != null && _grpcClient != null)
+        {
+            _ = _grpcClient.SendGameMessageAsync(gameMessage);
+        }
+    }
+    
     private void PublishPlayerPosition()
     {
         if (_gameSession == null || _grpcClient == null || !_isMultiplayer)
@@ -3928,76 +3981,67 @@ public class Game : Window
         
         // Throttle position updates to avoid flooding, but allow more frequent updates
         // Reduce throttling to 20ms for smoother movement
-        // Note: The periodic timer (200ms) will ensure position is sent even if player isn't moving
-        if ((_currentFrameTime - _lastPositionPublish).TotalMilliseconds < 20)
+        // Note: The periodic timer will ensure position is sent even if player isn't moving
+        if ((_currentFrameTime - _lastPositionPublish).TotalMilliseconds < PositionPublishThrottleMs)
             return;
         
         _positionSequence++;
         // IMPORTANT: All coordinates in gRPC messages must be WORLD/MAP coordinates, not viewport coordinates
         // _player.X and _player.Y are world coordinates (0 to MapWidth/MapHeight)
-        var gameMessage = new GameMessage
+        var gameMessage = CreateBaseGameMessage();
+        if (gameMessage == null)
+            return;
+        
+        gameMessage.Position = new PlayerPositionUpdate
         {
-            GameId = _gameSession.GameId,
-            PlayerId = _gameSession.PlayerId,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Position = new PlayerPositionUpdate
-            {
-                X = _player.X,  // World coordinate (map space)
-                Y = _player.Y,  // World coordinate (map space)
-                Sequence = _positionSequence
-            }
+            X = _player.X,  // World coordinate (map space)
+            Y = _player.Y,  // World coordinate (map space)
+            Sequence = _positionSequence
         };
         
         // Use fire-and-forget for position updates
-        _ = _grpcClient.SendGameMessageAsync(gameMessage);
+        SendGameMessage(gameMessage);
         _lastPositionPublish = _currentFrameTime;
     }
     
     private void PublishBulletUpdate(Bullet bullet, string action, string? hitType = null, string? hitTargetId = null)
     {
-        if (_gameSession == null || _grpcClient == null)
+        var gameMessage = CreateBaseGameMessage(bullet.PlayerId);
+        if (gameMessage == null)
             return;
         
-        var gameMessage = new GameMessage
+        gameMessage.Bullet = new BulletUpdate
         {
-            GameId = _gameSession.GameId,
-            PlayerId = bullet.PlayerId,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Bullet = new BulletUpdate
-            {
-                BulletId = bullet.BulletId,
-                X = bullet.X,
-                Y = bullet.Y,
-                VelocityX = bullet.VelocityX,
-                VelocityY = bullet.VelocityY,
-                Action = action,
-                HitType = hitType ?? "",
-                HitTargetId = hitTargetId ?? ""
-            }
+            BulletId = bullet.BulletId,
+            X = bullet.X,
+            Y = bullet.Y,
+            VelocityX = bullet.VelocityX,
+            VelocityY = bullet.VelocityY,
+            Action = action,
+            HitType = hitType ?? "",
+            HitTargetId = hitTargetId ?? ""
         };
         
-        _ = _grpcClient.SendGameMessageAsync(gameMessage);
+        SendGameMessage(gameMessage);
     }
     
     private void PublishPlayerCountUpdate()
     {
-        if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
+            return;
+        
+        var gameMessage = CreateBaseGameMessage();
+        if (gameMessage == null)
             return;
         
         int elapsed = (int)(_currentFrameTime - _gameSession.CreatedAt).TotalSeconds;
-        int timeRemaining = Math.Max(0, 60 - elapsed);
+        int timeRemaining = Math.Max(0, MultiplayerWaitTimeSeconds - elapsed);
         
-        var gameMessage = new GameMessage
+        gameMessage.PlayerCount = new PlayerCountUpdate
         {
-            GameId = _gameSession.GameId,
-            PlayerId = _gameSession.PlayerId,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            PlayerCount = new PlayerCountUpdate
-            {
-                CurrentPlayers = _gameSession.CurrentPlayers,
-                MaxPlayers = _gameSession.MaxPlayers,
-                TimeRemaining = timeRemaining
-            }
+            CurrentPlayers = _gameSession.CurrentPlayers,
+            MaxPlayers = _gameSession.MaxPlayers,
+            TimeRemaining = timeRemaining
         };
         foreach (var p in _gameSession.Players)
         {
@@ -4008,7 +4052,7 @@ public class Game : Window
                 PlayerNumber = p.PlayerNumber
             });
         }
-        _ = _grpcClient.SendGameMessageAsync(gameMessage);
+        SendGameMessage(gameMessage);
     }
     
     private async void StartMultiplayerGameSession()
@@ -4044,15 +4088,13 @@ public class Game : Window
         }
         
         // Publish game start message (gRPC doesn't use subscriptions - messages come through the stream)
-        var gameMessage = new GameMessage
+        var gameMessage = CreateBaseGameMessage();
+        if (gameMessage == null || _grpcClient == null)
+            return;
+        
+        gameMessage.GameStart = new GameStartMessage
         {
-            GameId = _gameSession.GameId,
-            PlayerId = _gameSession.PlayerId,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            GameStart = new GameStartMessage
-            {
-                Level = _gameState.Level
-            }
+            Level = _gameState.Level
         };
         // Avoid LINQ Select allocation - iterate directly
         gameMessage.GameStart.PlayerIds.Capacity = _gameSession.Players.Count;
@@ -4060,10 +4102,7 @@ public class Game : Window
         {
             gameMessage.GameStart.PlayerIds.Add(player.PlayerId);
         }
-        if (_grpcClient != null)
-        {
-            await _grpcClient.SendGameMessageAsync(gameMessage);
-        }
+        await _grpcClient.SendGameMessageAsync(gameMessage);
         
         // Start the game
         _gameSession.Status = GameSessionStatus.Playing;
@@ -4089,7 +4128,7 @@ public class Game : Window
         if (_gameSession.Role == GameSessionRole.Host)
         {
             // Small delay to ensure all players' streams are active, then publish game state
-            _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(200), () =>
+            _app.TimedEvents?.Add(TimeSpan.FromMilliseconds(GameStatePublishDelayMs), () =>
             {
                 PublishGameStateSnapshot();
                 PublishPlayerPosition(); // Also publish host's initial position
@@ -4134,12 +4173,12 @@ public class Game : Window
     
     private bool IsPositionOverlappingPlayers(int x, int y)
     {
-        // Check if position overlaps with any existing network player (2x3 area)
-        foreach (var networkPlayer in _networkPlayers.Values)
-        {
-            // Player occupies: [X, X+1] columns, [Y, Y+1, Y+2] rows
-            if (!(x + 2 <= networkPlayer.X || x >= networkPlayer.X + 2 ||
-                  y + 3 <= networkPlayer.Y || y >= networkPlayer.Y + 3))
+            // Check if position overlaps with any existing network player
+            foreach (var networkPlayer in _networkPlayers.Values)
+            {
+                // Player occupies: [X, X+PlayerWidth-1] columns, [Y, Y+PlayerHeight-1] rows
+                if (!(x + PlayerWidth <= networkPlayer.X || x >= networkPlayer.X + PlayerWidth ||
+                      y + PlayerHeight <= networkPlayer.Y || y >= networkPlayer.Y + PlayerHeight))
             {
                 return true; // Overlaps
             }
@@ -4164,23 +4203,21 @@ public class Game : Window
     
     private void PublishGameStateSnapshot()
     {
-        if (_gameSession == null || _grpcClient == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
             return;
         
         // IMPORTANT: All coordinates in gRPC messages must be WORLD/MAP coordinates, not viewport coordinates
         // All X/Y values here are world coordinates (0 to MapWidth/MapHeight)
         // Each client will convert these to viewport coordinates based on their own viewport dimensions
-        var gameMessage = new GameMessage
+        var gameMessage = CreateBaseGameMessage();
+        if (gameMessage == null)
+            return;
+        
+        gameMessage.State = new GameStateSnapshot
         {
-            GameId = _gameSession.GameId,
-            PlayerId = _gameSession.PlayerId,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            State = new GameStateSnapshot
-            {
-                Level = _gameState.Level,
-                Status = "playing",
-                Sequence = 0
-            }
+            Level = _gameState.Level,
+            Status = "playing",
+            Sequence = 0
         };
         // Add players - include all players from game session, not just network players
         // This ensures newly joined players are included even if they're not in _networkPlayers yet
@@ -4223,8 +4260,8 @@ public class Game : Window
                     Initials = sessionPlayer.Initials,
                     X = 0,  // Will be updated when they send position
                     Y = 0,
-                    Lives = 5,
-                    Score = 0,
+                    Lives = Player.InitialLives,
+                    Score = Player.InitialScore,
                     IsAlive = true
                 });
             }
@@ -4257,7 +4294,7 @@ public class Game : Window
                 IsAlive = s.IsAlive
             });
         }
-        _ = _grpcClient.SendGameMessageAsync(gameMessage);
+        SendGameMessage(gameMessage);
     }
 
 }

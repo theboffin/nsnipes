@@ -1,4 +1,4 @@
-﻿namespace NSnipes;
+namespace NSnipes;
 
 public class Player
 {
@@ -9,11 +9,14 @@ public class Player
     public bool IsAlive { get; set; } = true;
     public string Initials { get; set; } = "BD";
     
+    public const int InitialLives = 5;
+    public const int InitialScore = 0;
+    
     public Player(int x, int y)
     {
         X = x;
         Y = y;
-        Score = 0;
-        Lives = 5;
+        Score = InitialScore;
+        Lives = InitialLives;
     }
 }

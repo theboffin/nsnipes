@@ -21,8 +21,8 @@ public class PlayerNetwork
     public int LastDrawnViewportY { get; set; } = -1;
     
     // Game state
-    public int Lives { get; set; } = 5;
-    public int Score { get; set; } = 0;
+    public int Lives { get; set; } = Player.InitialLives;
+    public int Score { get; set; } = Player.InitialScore;
     public bool IsAlive { get; set; } = true;
     
     // Network sync

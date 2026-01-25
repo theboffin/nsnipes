@@ -66,7 +66,8 @@ public class IntroScreen : View
     private string _currentGameId = "";
     private int _currentPlayerCount = 0;
     private int _maxPlayers = 1;
-    private int _timeRemaining = 60;
+    private const int MultiplayerWaitTimeSeconds = 60;
+    private int _timeRemaining = MultiplayerWaitTimeSeconds;
     private List<string> _joinedPlayers = new List<string>(5); // Max 5 players
     private DateTime _joinWaitStartTime = DateTime.Now;
     
@@ -769,7 +770,7 @@ public class IntroScreen : View
         // Only reset timer if this is the first time showing the waiting screen
         if (!wasAlreadyWaiting)
         {
-            _timeRemaining = 60;
+            _timeRemaining = MultiplayerWaitTimeSeconds;
             _joinWaitStartTime = DateTime.Now;
             _joinedPlayers.Clear();
             if (isHost)

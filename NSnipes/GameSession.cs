@@ -56,7 +56,7 @@ public class NetworkPlayerInfo
     public int PlayerNumber { get; set; }
     public int X { get; set; }
     public int Y { get; set; }
-    public int Lives { get; set; } = 5;
+    public int Lives { get; set; } = Player.InitialLives;
     public int Score { get; set; } = 0;
     public bool IsAlive { get; set; } = true;
     public bool IsLocal { get; set; } = false;
