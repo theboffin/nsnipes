@@ -170,6 +170,14 @@ So what's left to do:
 
 **Intro Screen**
 - Animated NSNIPES banner that scrolls in from the left over 2 seconds
+- **Interactive Demo Animation**: After the banner centers (2 seconds), an interactive demo begins showing gameplay mechanics:
+  - Two demo players (BD in white, NP in yellow) move around the screen with intelligent AI
+  - Players avoid the menu and logo areas, maintain direction for smoother movement, and can shoot at snipes
+  - Snipes (TypeA in magenta, TypeB in green) spawn from menu edges and move away from players
+  - Players shoot red '*' bullets toward nearest snipes with collision detection
+  - Demo entities respawn when hit, creating continuous gameplay demonstration
+  - Menu remains fully accessible and functional during the demo
+  - Demo automatically pauses when any menu option is selected and resumes when returning to the main menu
 - Menu system with the following options:
   - **Start a New Game**: Begins a new single-player game with a clearing effect animation
   - **Start Multiplayer**: Host a new multiplayer game (1-5 players, 60-second join window)
@@ -330,7 +338,21 @@ So what's left to do:
 
 ## Recent Changes
 
-### Terminal.Gui v2 Upgrade and .NET 10 Migration (Latest)
+### Intro Screen Demo Animation (Latest)
+- **Interactive Demo Animation**: Added fully functional demo animation to the intro screen
+  - Two demo players (BD white, NP yellow) with intelligent movement AI
+  - Players maintain direction for 3-8 moves before changing, creating smoother movement patterns
+  - Players avoid menu/logo areas, avoid each other, and home in on nearby snipes
+  - Snipes spawn from menu edges (mix of TypeA magenta and TypeB green)
+  - Snipes move away from players with improved movement frequency
+  - Players shoot red '*' bullets toward nearest snipes (matching game bullet speed)
+  - Bullet-snipe and bullet-player collision detection with respawn logic
+  - Demo pauses automatically when menu options are selected
+  - Menu remains fully accessible and visible at all times
+  - Performance optimized with parallel processing, caching, and squared distance calculations
+  - Uses C# 14 features: primary constructors, collection expressions, `in` parameters, `ReadOnlySpan`
+
+### Terminal.Gui v2 Upgrade and .NET 10 Migration
 - **Upgraded to Terminal.Gui v2.0.0-develop.4828**: Complete migration from v2.0.0-prealpha.1895 to the latest develop branch
   - Refactored to use `IApplication` pattern with `Application.Create()`, `app.Init()`, and `app.Run()`
   - Converted all `Application.Driver` calls to `View`'s rendering methods (`OnDrawingContent`, `Move`, `SetAttribute`, `AddRune`)
