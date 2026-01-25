@@ -23,31 +23,31 @@ public class Hive(int x, int y, int snipesPerHive, DateTime? initialSpawnTime = 
         return SnipesRemaining > 0 && !IsDestroyed;
     }
     
-    public char GetNextSnipeType()
+    public SnipeType GetNextSnipeType()
     {
         // Alternate or prefer type with more remaining
         if (SnipesType2 > 0 && SnipesType3 > 0)
         {
             // Randomly choose between the two
-            return Random.Shared.Next(2) == 0 ? 'A' : 'B';
+            return Random.Shared.Next(2) == 0 ? SnipeType.TypeA : SnipeType.TypeB;
         }
         else if (SnipesType2 > 0)
         {
-            return 'A';
+            return SnipeType.TypeA;
         }
         else if (SnipesType3 > 0)
         {
-            return 'B';
+            return SnipeType.TypeB;
         }
-        return 'A'; // Default
+        return SnipeType.TypeA; // Default
     }
     
     public void SpawnSnipe(DateTime? spawnTime = null)
     {
         if (SnipesRemaining > 0)
         {
-            char type = GetNextSnipeType();
-            if (type == 'A')
+            SnipeType type = GetNextSnipeType();
+            if (type == SnipeType.TypeA)
                 SnipesType2--;
             else
                 SnipesType3--;
@@ -56,4 +56,3 @@ public class Hive(int x, int y, int snipesPerHive, DateTime? initialSpawnTime = 
         }
     }
 }
-

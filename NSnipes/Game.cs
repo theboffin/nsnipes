@@ -63,13 +63,17 @@ public class Game : Window
     // Performance optimization: Track previous positions to avoid unnecessary redraws
     private int _previousPlayerViewportX = -1;
     private int _previousPlayerViewportY = -1;
+    // Cached map viewport - null indicates cache is invalid/dirty
+    // Using null for invalidation is simple and effective (no need for IsDirty flag)
     private string[]? _cachedMapViewport = null;
     private DateTime _cachedDateTime = DateTime.MinValue;
     
-    // Frame rate tracking
+    // Frame rate tracking using circular buffer for better performance
     private DateTime _lastFrameTime = DateTime.Now;
     private double _currentFPS = 0.0;
-    private readonly Queue<double> _fpsHistory = new Queue<double>(FpsHistorySize);
+    private readonly double[] _fpsHistory = new double[FpsHistorySize];
+    private int _fpsHistoryIndex = 0;
+    private int _fpsHistoryCount = 0; // Track how many entries are valid
     private const int FpsHistorySize = 10; // Average over last 10 frames
     
     // Cached DateTime for current frame/update cycle to avoid excessive DateTime.Now calls
@@ -843,17 +847,21 @@ public class Game : Window
             // Calculate FPS for this frame
             double frameFPS = 1000.0 / elapsedMs;
             
-            // Add to history
-            _fpsHistory.Enqueue(frameFPS);
-            if (_fpsHistory.Count > FpsHistorySize)
-            {
-                _fpsHistory.Dequeue();
-            }
+            // Add to circular buffer
+            _fpsHistory[_fpsHistoryIndex] = frameFPS;
+            _fpsHistoryIndex = (_fpsHistoryIndex + 1) % FpsHistorySize;
+            if (_fpsHistoryCount < FpsHistorySize)
+                _fpsHistoryCount++;
             
-            // Calculate average FPS
-            if (_fpsHistory.Count > 0)
+            // Calculate average FPS using circular buffer
+            if (_fpsHistoryCount > 0)
             {
-                _currentFPS = _fpsHistory.Average();
+                double sum = 0.0;
+                for (int i = 0; i < _fpsHistoryCount; i++)
+                {
+                    sum += _fpsHistory[i];
+                }
+                _currentFPS = sum / _fpsHistoryCount;
             }
         }
         
@@ -949,7 +957,7 @@ public class Game : Window
     /// Handles bullet-snipe collision - returns true if bullet was removed
     /// </summary>
     private bool HandleBulletSnipeCollision(Bullet bullet, int bulletWorldX, int bulletWorldY,
-                                           int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, int bulletIndex)
+                                           int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, string bulletId)
     {
         for (int j = _snipes.Count - 1; j >= 0; j--)
         {
@@ -989,9 +997,23 @@ public class Game : Window
                 // Invalidate cached map since we're removing entities
                 _cachedMapViewport = null;
 
-                // Remove from lists AFTER clearing
+                // Remove from lists AFTER clearing - use bullet ID to find and remove
                 _snipes.RemoveAt(j);
-                _bullets.RemoveAt(bulletIndex);
+                
+                // Find and remove bullet by ID (more robust than using index)
+                int bulletIndexToRemove = -1;
+                for (int idx = 0; idx < _bullets.Count; idx++)
+                {
+                    if (_bullets[idx]?.BulletId == bulletId)
+                    {
+                        bulletIndexToRemove = idx;
+                        break;
+                    }
+                }
+                if (bulletIndexToRemove >= 0)
+                {
+                    _bullets.RemoveAt(bulletIndexToRemove);
+                }
                 _gameState.SnipesUndestroyed--;
                 _gameState.Score += SnipeKillScore;
                 _player.Score += SnipeKillScore;
@@ -1012,7 +1034,7 @@ public class Game : Window
     /// Handles bullet-hive collision - returns true if bullet was removed
     /// </summary>
     private bool HandleBulletHiveCollision(Bullet bullet, int bulletWorldX, int bulletWorldY,
-                                          int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, int bulletIndex)
+                                          int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, string bulletId)
     {
         foreach (var hive in _hives)
         {
@@ -1056,7 +1078,20 @@ public class Game : Window
                     PublishBulletUpdate(bullet, "hit", "hive", $"hive_{hive.X}_{hive.Y}");
                 }
                 
-                _bullets.RemoveAt(bulletIndex);
+                // Find and remove bullet by ID (more robust than using index)
+                int bulletIndexToRemove = -1;
+                for (int idx = 0; idx < _bullets.Count; idx++)
+                {
+                    if (_bullets[idx]?.BulletId == bulletId)
+                    {
+                        bulletIndexToRemove = idx;
+                        break;
+                    }
+                }
+                if (bulletIndexToRemove >= 0)
+                {
+                    _bullets.RemoveAt(bulletIndexToRemove);
+                }
 
                 // Check if hive is destroyed (3 hits)
                 if (hive.Hits >= Hive.HitsToDestroy)
@@ -1191,14 +1226,37 @@ public class Game : Window
         int mapOffsetX = _player.X - (frameWidth / 2);
         int mapOffsetY = _player.Y - (frameHeight / 2);
 
+        // Use bullet IDs instead of indices to avoid index invalidation issues
         for (int i = _bullets.Count - 1; i >= 0; i--)
         {
+            // Defensive check: ensure index is valid
+            if (i < 0 || i >= _bullets.Count)
+                break;
+                
             var bullet = _bullets[i];
+            if (bullet == null)
+                continue;
+                
+            // Capture bullet ID for safe lookup after potential removals
+            string bulletId = bullet.BulletId;
 
             // Check if bullet has expired
             if (HandleBulletExpiration(bullet, frameWidth, frameHeight, mapOffsetX, mapOffsetY, map))
             {
-                _bullets.RemoveAt(i);
+                // Re-find bullet by ID to ensure it still exists before removing
+                int bulletIndexToRemove = -1;
+                for (int idx = 0; idx < _bullets.Count; idx++)
+                {
+                    if (_bullets[idx]?.BulletId == bulletId)
+                    {
+                        bulletIndexToRemove = idx;
+                        break;
+                    }
+                }
+                if (bulletIndexToRemove >= 0)
+                {
+                    _bullets.RemoveAt(bulletIndexToRemove);
+                }
                 continue;
             }
 
@@ -1225,19 +1283,45 @@ public class Game : Window
             bulletWorldY = _map.WrapY(bulletWorldY);
 
             bool bulletRemoved = HandleBulletSnipeCollision(bullet, bulletWorldX, bulletWorldY, 
-                                                           frameWidth, frameHeight, mapOffsetX, mapOffsetY, i);
+                                                           frameWidth, frameHeight, mapOffsetX, mapOffsetY, bulletId);
 
             // Check for bullet-hive collision (only if bullet still exists)
             if (!bulletRemoved)
             {
-                bulletRemoved = HandleBulletHiveCollision(bullet, bulletWorldX, bulletWorldY, 
-                                                         frameWidth, frameHeight, mapOffsetX, mapOffsetY, i);
+                // Re-find bullet by ID before checking hive collision
+                Bullet? bulletToCheck = null;
+                for (int idx = 0; idx < _bullets.Count; idx++)
+                {
+                    if (_bullets[idx]?.BulletId == bulletId)
+                    {
+                        bulletToCheck = _bullets[idx];
+                        break;
+                    }
+                }
+                if (bulletToCheck != null)
+                {
+                    bulletRemoved = HandleBulletHiveCollision(bulletToCheck, bulletWorldX, bulletWorldY, 
+                                                             frameWidth, frameHeight, mapOffsetX, mapOffsetY, bulletId);
+                }
             }
             
             // Check for bullet-to-player collision (host only, for all bullets)
-            if (_isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host)
+            if (!bulletRemoved && _isMultiplayer && _gameSession != null && _gameSession.Role == GameSessionRole.Host)
             {
-                CheckBulletPlayerCollision(bullet, frameWidth, frameHeight, mapOffsetX, mapOffsetY);
+                // Re-find bullet by ID before checking player collision
+                Bullet? bulletToCheck = null;
+                for (int idx = 0; idx < _bullets.Count; idx++)
+                {
+                    if (_bullets[idx]?.BulletId == bulletId)
+                    {
+                        bulletToCheck = _bullets[idx];
+                        break;
+                    }
+                }
+                if (bulletToCheck != null)
+                {
+                    CheckBulletPlayerCollision(bulletToCheck, frameWidth, frameHeight, mapOffsetX, mapOffsetY);
+                }
             }
         }
     }
@@ -1579,7 +1663,7 @@ public class Game : Window
                 // Spawn snipe at hive position (center of 2x2 hive)
                 int snipeX = hive.X + 1; // Center of hive
                 int snipeY = hive.Y + 1;
-                char snipeType = hive.GetNextSnipeType();
+                SnipeType snipeType = hive.GetNextSnipeType();
 
                 var snipe = new Snipe(snipeX, snipeY, snipeType);
 
@@ -1641,9 +1725,25 @@ public class Game : Window
             Y = snipe.Y,
             DirectionX = snipe.DirectionX,
             DirectionY = snipe.DirectionY,
-            Type = snipe.Type.ToString()
+            Type = snipe.Type == SnipeType.TypeA ? "A" : "B"
         });
         SendGameMessage(gameMessage);
+    }
+    
+    /// <summary>
+    /// Parses a string snipe type from gRPC message to SnipeType enum
+    /// </summary>
+    private static SnipeType ParseSnipeType(string? typeString)
+    {
+        if (string.IsNullOrEmpty(typeString))
+            return SnipeType.TypeA; // Default
+        
+        return typeString.Trim().ToUpperInvariant() switch
+        {
+            "A" or "TYPEA" => SnipeType.TypeA,
+            "B" or "TYPEB" => SnipeType.TypeB,
+            _ => SnipeType.TypeA // Default fallback
+        };
     }
     
     private void PublishSnipeUpdates()
@@ -2553,8 +2653,8 @@ public class Game : Window
         if (viewportX >= 0 && viewportX < frameWidth &&
             viewportY >= 0 && viewportY < frameHeight)
         {
-            // Set color based on snipe type: 'A' = magenta, 'B' = green
-            var snipeColor = snipe.Type == 'A' ? Color.Magenta : Color.Green;
+            // Set color based on snipe type: TypeA = magenta, TypeB = green
+            var snipeColor = snipe.Type == SnipeType.TypeA ? Color.Magenta : Color.Green;
             SetAttribute(new DrawingAttribute(snipeColor, Color.Black));
 
             // Draw order depends on direction:
@@ -4105,7 +4205,9 @@ public class Game : Window
                     
                     if (snipeState.IsAlive)
                     {
-                        var snipe = new Snipe(snipeState.X, snipeState.Y, !string.IsNullOrEmpty(snipeState.Type) ? snipeState.Type[0] : 'A')  // World coordinates
+                        // Convert string type from gRPC to enum
+                        SnipeType snipeType = ParseSnipeType(snipeState.Type);
+                        var snipe = new Snipe(snipeState.X, snipeState.Y, snipeType)  // World coordinates
                         {
                             DirectionX = snipeState.DirectionX,
                             DirectionY = snipeState.DirectionY,
@@ -4261,7 +4363,9 @@ public class Game : Window
             if (update.Action == "spawned")
             {
                 // Create new snipe
-                var snipe = new Snipe(update.X, update.Y, !string.IsNullOrEmpty(update.Type) ? update.Type[0] : 'A', update.DirectionX, update.DirectionY);
+                // Convert string type from gRPC to enum
+                SnipeType snipeType = ParseSnipeType(update.Type);
+                var snipe = new Snipe(update.X, update.Y, snipeType, update.DirectionX, update.DirectionY);
                 snipe.SnipeId = update.SnipeId;
                 _snipes.Add(snipe);
             }
@@ -4872,7 +4976,7 @@ public class Game : Window
                 SnipeId = s.SnipeId,
                 X = s.X,  // World coordinate (map space)
                 Y = s.Y,  // World coordinate (map space)
-                Type = s.Type.ToString(),
+                Type = s.Type == SnipeType.TypeA ? "A" : "B",
                 DirectionX = s.DirectionX,
                 DirectionY = s.DirectionY,
                 IsAlive = s.IsAlive

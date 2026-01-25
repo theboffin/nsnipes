@@ -5,9 +5,9 @@ using DrawingAttribute = Terminal.Gui.Drawing.Attribute;
 namespace NSnipes;
 
 /// <summary>
-/// Helper methods for Terminal.Gui v2 View classes to simplify common drawing operations
+/// Drawing-specific extension methods for Terminal.Gui v2 View classes
 /// </summary>
-public static class ViewHelpers
+public static class ViewDrawingExtensions
 {
     /// <summary>
     /// Adds a string to the view at the current cursor position by converting each character to a Rune
