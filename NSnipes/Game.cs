@@ -546,13 +546,11 @@ public class Game : Window
         }
     }
 
-    private bool ProcessPlayerMovement()
+    /// <summary>
+    /// Cleans up old key presses that haven't been seen recently (keys are considered released)
+    /// </summary>
+    private void CleanupOldKeyPresses()
     {
-        if (!IsInitialized || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
-            return false;
-
-        // Clean up old key presses (keys not seen recently are considered released)
-        // Use a more aggressive cleanup to detect key releases faster
         var keysToRemove = new List<string>(_pressedKeys.Count); // Pre-allocate with expected size
         foreach (var kvp in _pressedKeys)
         {
@@ -567,85 +565,13 @@ public class Game : Window
         {
             _pressedKeys.Remove(key);
         }
-        
-        // If we just removed keys, prioritize remaining keys for immediate response
-        // This helps when switching from one direction to another
+    }
 
-        // If no keys are pressed, don't move
-        if (_pressedKeys.Count == 0)
-            return false;
-
-        int currentWidth = Frame.Width;
-        int currentHeight = Frame.Height;
-        int frameWidth = currentWidth;
-        int frameHeight = currentHeight;
-
-        // Get map viewport centered on player position
-        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-
-        // Calculate top-left corner of player in viewport coordinates
-        int topLeftCol = frameWidth / 2;
-        int topLeftRow = frameHeight / 2;
-
-        // Helper function to check if a cell is walkable (space)
-        bool IsWalkable(int row, int col)
-        {
-            if (row < 0 || row >= frameHeight || col < 0 || col >= frameWidth)
-                return false;
-            return map?[row][col] == ' ';
-        }
-
-        // Helper function to check if all 6 cells the player will occupy are walkable
-        bool CanMoveTo(int newTopLeftCol, int newTopLeftRow)
-        {
-            // Check walls first
-            if (!IsWalkable(newTopLeftRow, newTopLeftCol) ||
-                !IsWalkable(newTopLeftRow, newTopLeftCol + 1) ||
-                !IsWalkable(newTopLeftRow + 1, newTopLeftCol) ||
-                !IsWalkable(newTopLeftRow + 1, newTopLeftCol + 1) ||
-                !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol) ||
-                !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol + 1))
-            {
-                return false;
-            }
-            
-            // Check player-to-player collision in multiplayer
-            if (_isMultiplayer && _gameSession != null)
-            {
-                // Calculate new world position from viewport delta
-                int viewportDeltaX = newTopLeftCol - topLeftCol;
-                int viewportDeltaY = newTopLeftRow - topLeftRow;
-                int newWorldX = _player.X + viewportDeltaX;
-                int newWorldY = _player.Y + viewportDeltaY;
-                
-                // Handle map wrapping for collision check
-                newWorldX = _map.WrapX(newWorldX);
-                newWorldY = _map.WrapY(newWorldY);
-                
-                // Check against all other players (local and remote)
-                foreach (var networkPlayer in _networkPlayers.Values)
-                {
-                    if (networkPlayer.PlayerId == _gameSession.PlayerId)
-                        continue; // Skip self
-                    
-                    // Get network player world position (wrapped)
-                    int npWorldX = _map.WrapX(networkPlayer.X);
-                    int npWorldY = _map.WrapY(networkPlayer.Y);
-                    
-                    // Check if new position overlaps with this player
-                    // Player occupies: [X, X+PlayerWidth-1] columns, [Y, Y+PlayerHeight-1] rows
-                    if (!(newWorldX + PlayerWidth <= npWorldX || newWorldX >= npWorldX + PlayerWidth ||
-                          newWorldY + PlayerHeight <= npWorldY || newWorldY >= npWorldY + PlayerHeight))
-                    {
-                        return false; // Overlaps with another player
-                    }
-                }
-            }
-            
-            return true;
-        }
-
-        // Determine movement direction based on currently pressed keys
+    /// <summary>
+    /// Calculates movement direction based on currently pressed keys
+    /// </summary>
+    private (int deltaX, int deltaY) CalculateMovementDirection()
+    {
         int deltaX = 0;
         int deltaY = 0;
 
@@ -691,37 +617,135 @@ public class Game : Window
             if (rightPressed) deltaX = 1;
         }
 
+        return (deltaX, deltaY);
+    }
+
+    /// <summary>
+    /// Checks if player can move to the specified viewport position
+    /// </summary>
+    private bool CanMoveTo(int newTopLeftCol, int newTopLeftRow, int topLeftCol, int topLeftRow, 
+                           string[] map, int frameWidth, int frameHeight)
+    {
+        // Helper function to check if a cell is walkable (space)
+        bool IsWalkable(int row, int col)
+        {
+            if (row < 0 || row >= frameHeight || col < 0 || col >= frameWidth)
+                return false;
+            return map?[row][col] == ' ';
+        }
+
+        // Check walls first
+        if (!IsWalkable(newTopLeftRow, newTopLeftCol) ||
+            !IsWalkable(newTopLeftRow, newTopLeftCol + 1) ||
+            !IsWalkable(newTopLeftRow + 1, newTopLeftCol) ||
+            !IsWalkable(newTopLeftRow + 1, newTopLeftCol + 1) ||
+            !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol) ||
+            !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol + 1))
+        {
+            return false;
+        }
+        
+        // Check player-to-player collision in multiplayer
+        if (_isMultiplayer && _gameSession != null)
+        {
+            // Calculate new world position from viewport delta
+            int viewportDeltaX = newTopLeftCol - topLeftCol;
+            int viewportDeltaY = newTopLeftRow - topLeftRow;
+            int newWorldX = _player.X + viewportDeltaX;
+            int newWorldY = _player.Y + viewportDeltaY;
+            
+            // Handle map wrapping for collision check
+            newWorldX = _map.WrapX(newWorldX);
+            newWorldY = _map.WrapY(newWorldY);
+            
+            // Check against all other players (local and remote)
+            foreach (var networkPlayer in _networkPlayers.Values)
+            {
+                if (networkPlayer.PlayerId == _gameSession.PlayerId)
+                    continue; // Skip self
+                
+                // Get network player world position (wrapped)
+                int npWorldX = _map.WrapX(networkPlayer.X);
+                int npWorldY = _map.WrapY(networkPlayer.Y);
+                
+                // Check if new position overlaps with this player
+                // Player occupies: [X, X+PlayerWidth-1] columns, [Y, Y+PlayerHeight-1] rows
+                if (!(newWorldX + PlayerWidth <= npWorldX || newWorldX >= npWorldX + PlayerWidth ||
+                      newWorldY + PlayerHeight <= npWorldY || newWorldY >= npWorldY + PlayerHeight))
+                {
+                    return false; // Overlaps with another player
+                }
+            }
+        }
+        
+        return true;
+    }
+
+    /// <summary>
+    /// Executes player movement and handles map wrapping
+    /// </summary>
+    private void ExecutePlayerMove(int deltaX, int deltaY)
+    {
+        _player.X += deltaX;
+        _player.Y += deltaY;
+
+        // Handle map wrapping
+        if (_player.X < 0)
+            _player.X = _map.MapWidth;
+        else if (_player.X > _map.MapWidth)
+            _player.X = 0;
+
+        if (_player.Y < 0)
+            _player.Y = _map.MapHeight;
+        else if (_player.Y > _map.MapHeight)
+            _player.Y = 0;
+
+        // Invalidate cached map since player moved
+        _cachedMapViewport = null;
+        
+        // Publish position update in multiplayer
+        if (_isMultiplayer && _gameSession != null && _grpcClient != null)
+        {
+            PublishPlayerPosition();
+        }
+    }
+
+    private bool ProcessPlayerMovement()
+    {
+        if (!IsInitialized || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
+            return false;
+
+        // Clean up old key presses
+        CleanupOldKeyPresses();
+
+        // If no keys are pressed, don't move
+        if (_pressedKeys.Count == 0)
+            return false;
+
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
+        int frameWidth = currentWidth;
+        int frameHeight = currentHeight;
+
+        // Get map viewport centered on player position
+        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+
+        // Calculate top-left corner of player in viewport coordinates
+        int topLeftCol = frameWidth / 2;
+        int topLeftRow = frameHeight / 2;
+
+        // Calculate movement direction
+        var (deltaX, deltaY) = CalculateMovementDirection();
+
         // Try to move if there's a direction
         if (deltaX != 0 || deltaY != 0)
         {
             int newTopLeftCol = topLeftCol + deltaX;
             int newTopLeftRow = topLeftRow + deltaY;
 
-            if (CanMoveTo(newTopLeftCol, newTopLeftRow))
+            if (CanMoveTo(newTopLeftCol, newTopLeftRow, topLeftCol, topLeftRow, map, frameWidth, frameHeight))
             {
-                _player.X += deltaX;
-                _player.Y += deltaY;
-
-                // Handle map wrapping
-                if (_player.X < 0)
-                    _player.X = _map.MapWidth;
-                else if (_player.X > _map.MapWidth)
-                    _player.X = 0;
-
-                if (_player.Y < 0)
-                    _player.Y = _map.MapHeight;
-                else if (_player.Y > _map.MapHeight)
-                    _player.Y = 0;
-
-                // Invalidate cached map since player moved
-                _cachedMapViewport = null;
-                
-                // Publish position update in multiplayer
-                if (_isMultiplayer && _gameSession != null && _grpcClient != null)
-                {
-                    PublishPlayerPosition();
-                }
-                
+                ExecutePlayerMove(deltaX, deltaY);
                 return true; // Player moved
             }
         }
@@ -874,6 +898,284 @@ public class Game : Window
         _previousPlayerViewportY = frameHeight2 / 2;
     }
 
+    /// <summary>
+    /// Clears a bullet at the specified viewport position
+    /// </summary>
+    private void ClearBulletAtPosition(int viewportX, int viewportY, int frameWidth, int frameHeight, string[] map)
+    {
+        if (viewportX >= 0 && viewportX < frameWidth &&
+            viewportY >= 0 && viewportY < frameHeight &&
+            map != null && viewportY >= 0 && viewportY < map.Length &&
+            viewportX >= 0 && viewportX < map[viewportY].Length)
+        {
+            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
+            Move(viewportX, viewportY + StatusBarHeight);
+            AddRune(map[viewportY][viewportX]);
+            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+        }
+    }
+
+    /// <summary>
+    /// Clears bullet at current position and previous position if different
+    /// </summary>
+    private void ClearBulletAndPreviousPosition(Bullet bullet, int bulletWorldX, int bulletWorldY,
+                                                int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, string[] map)
+    {
+        // Clear bullet at collision point
+        int viewportX = bulletWorldX - mapOffsetX;
+        int viewportY = bulletWorldY - mapOffsetY;
+        ClearBulletAtPosition(viewportX, viewportY, frameWidth, frameHeight, map);
+
+        // Also clear bullet's previous position if different
+        int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+        int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+        prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+        prevBulletWorldY = _map.WrapY(prevBulletWorldY);
+
+        if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+        {
+            int prevViewportX = prevBulletWorldX - mapOffsetX;
+            int prevViewportY = prevBulletWorldY - mapOffsetY;
+            ClearBulletAtPosition(prevViewportX, prevViewportY, frameWidth, frameHeight, map);
+        }
+    }
+
+    /// <summary>
+    /// Handles bullet-snipe collision - returns true if bullet was removed
+    /// </summary>
+    private bool HandleBulletSnipeCollision(Bullet bullet, int bulletWorldX, int bulletWorldY,
+                                           int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, int bulletIndex)
+    {
+        for (int j = _snipes.Count - 1; j >= 0; j--)
+        {
+            var snipe = _snipes[j];
+            if (!snipe.IsAlive)
+                continue;
+
+            int snipeWorldX = _map.WrapX(snipe.X);
+            int snipeWorldY = _map.WrapY(snipe.Y);
+
+            // Check bullet at snipe position
+            bool hitSnipe = (bulletWorldX == snipeWorldX && bulletWorldY == snipeWorldY);
+            
+            // Check bullet at arrow position
+            if (!hitSnipe)
+            {
+                int arrowWorldX = snipeWorldX + (snipe.DirectionX < 0 ? -1 : 1);
+                arrowWorldX = _map.WrapX(arrowWorldX);
+                hitSnipe = (bulletWorldX == arrowWorldX && bulletWorldY == snipeWorldY);
+            }
+
+            if (hitSnipe)
+            {
+                // Bullet hit snipe - clear both bullet and snipe
+                snipe.IsAlive = false;
+
+                // Get fresh map to ensure we have correct character for clearing
+                var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+
+                // Clear snipe first (both '@' and arrow) - uses world coordinates
+                ClearSnipePosition(snipe);
+
+                // Clear bullet at collision point and previous position
+                ClearBulletAndPreviousPosition(bullet, bulletWorldX, bulletWorldY, 
+                                              frameWidth, frameHeight, mapOffsetX, mapOffsetY, freshMap);
+
+                // Invalidate cached map since we're removing entities
+                _cachedMapViewport = null;
+
+                // Remove from lists AFTER clearing
+                _snipes.RemoveAt(j);
+                _bullets.RemoveAt(bulletIndex);
+                _gameState.SnipesUndestroyed--;
+                _gameState.Score += SnipeKillScore;
+                _player.Score += SnipeKillScore;
+                
+                // Check for level completion (host only in multiplayer)
+                if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                {
+                    CheckLevelComplete();
+                }
+                
+                return true; // Bullet was removed
+            }
+        }
+        return false; // Bullet not removed
+    }
+
+    /// <summary>
+    /// Handles bullet-hive collision - returns true if bullet was removed
+    /// </summary>
+    private bool HandleBulletHiveCollision(Bullet bullet, int bulletWorldX, int bulletWorldY,
+                                          int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, int bulletIndex)
+    {
+        foreach (var hive in _hives)
+        {
+            if (hive.IsDestroyed)
+                continue;
+
+            // Check if bullet is within hive bounds (2x2 area)
+            // Hive occupies: [X, X+1] columns, [Y, Y+1] rows
+            int hiveWorldX = _map.WrapX(hive.X);
+            int hiveWorldY = _map.WrapY(hive.Y);
+            int hiveWorldX2 = _map.WrapX(hiveWorldX + 1);
+            int hiveWorldY2 = _map.WrapY(hiveWorldY + 1);
+
+            // Check if bullet is within the 2x2 hive area
+            bool inHiveX = (bulletWorldX == hiveWorldX || bulletWorldX == hiveWorldX2);
+            bool inHiveY = (bulletWorldY == hiveWorldY || bulletWorldY == hiveWorldY2);
+
+            if (inHiveX && inHiveY)
+            {
+                // Bullet hit hive
+                hive.Hits++;
+
+                // Reduce flash rate by 1/3 (for this hive only)
+                hive.FlashIntervalMs = (int)(hive.FlashIntervalMs * 2.0 / 3.0);
+                if (hive.FlashIntervalMs < 10) hive.FlashIntervalMs = 10; // Minimum 10ms
+
+                // Get fresh map to ensure we have correct character for clearing
+                var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+
+                // Clear bullet at collision point and previous position
+                ClearBulletAndPreviousPosition(bullet, bulletWorldX, bulletWorldY, 
+                                              frameWidth, frameHeight, mapOffsetX, mapOffsetY, freshMap);
+
+                // Invalidate cached map since we're removing a bullet
+                _cachedMapViewport = null;
+
+                // Publish bullet hit in multiplayer (host only)
+                if (_isMultiplayer && _gameSession != null && _grpcClient != null && 
+                    _gameSession.Role == GameSessionRole.Host && bullet.PlayerId == _gameSession.PlayerId)
+                {
+                    PublishBulletUpdate(bullet, "hit", "hive", $"hive_{hive.X}_{hive.Y}");
+                }
+                
+                _bullets.RemoveAt(bulletIndex);
+
+                // Check if hive is destroyed (3 hits)
+                if (hive.Hits >= Hive.HitsToDestroy)
+                {
+                    hive.IsDestroyed = true;
+                    _gameState.HivesUndestroyed--;
+
+                    // Clear hive from screen immediately
+                    ClearHivePosition(hive);
+
+                    // Kill all unreleased snipes from this hive
+                    int unreleasedSnipes = hive.SnipesRemaining;
+
+                    // Add score: base score for hive + score per unreleased snipe
+                    int hiveScore = HiveBaseScore + (unreleasedSnipes * SnipePerHiveScore);
+                    _gameState.Score += hiveScore;
+                    _player.Score += hiveScore;
+
+                    // Update total snipes count (unreleased snipes are now gone)
+                    _gameState.SnipesUndestroyed -= unreleasedSnipes;
+                    _gameState.TotalSnipes -= unreleasedSnipes;
+                    
+                    // Check for level completion (host only in multiplayer)
+                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                    {
+                        CheckLevelComplete();
+                    }
+                }
+
+                return true; // Bullet was removed
+            }
+        }
+        return false; // Bullet not removed
+    }
+
+    /// <summary>
+    /// Handles bullet expiration - removes expired bullets and clears them from screen
+    /// </summary>
+    private bool HandleBulletExpiration(Bullet bullet, int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY, string[] map)
+    {
+        double ageSeconds = (_currentFrameTime - bullet.CreatedAt).TotalSeconds;
+        if (ageSeconds >= Bullet.LifetimeSeconds)
+        {
+            // Clear the expired bullet from screen before removing
+            int viewportX = (int)Math.Round(bullet.X) - mapOffsetX;
+            int viewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
+            ClearBulletAtPosition(viewportX, viewportY, frameWidth, frameHeight, map);
+
+            // Publish bullet expired in multiplayer
+            if (_isMultiplayer && _gameSession != null && _grpcClient != null && bullet.PlayerId == _gameSession.PlayerId)
+            {
+                PublishBulletUpdate(bullet, "expired");
+            }
+            
+            return true; // Bullet expired
+        }
+        return false; // Bullet still alive
+    }
+
+    /// <summary>
+    /// Handles bullet wall collision and bouncing
+    /// </summary>
+    private void HandleBulletWallCollision(Bullet bullet, double prevX, double prevY)
+    {
+        // Check for wall collision using world map coordinates
+        int bulletMapX = (int)Math.Round(bullet.X);
+        int bulletMapY = (int)Math.Round(bullet.Y);
+
+        // Wrap coordinates to map bounds
+        bulletMapX = _map.WrapX(bulletMapX);
+        bulletMapY = _map.WrapY(bulletMapY);
+
+        // Check if bullet hit a wall
+        if (_map.IsValidCoordinate(bulletMapX, bulletMapY))
+        {
+            char cell = _map.FullMap[bulletMapY][bulletMapX];
+            if (cell != ' ')
+            {
+                // Hit a wall - determine wall type and bounce accordingly
+                // Horizontal walls: ═, ─, ╦, ╩, ╬ (reverse Y)
+                // Vertical walls: ║, │, ╣, ╠ (reverse X)
+                // Corners: ╗, ╝, ╚, ╔ (determine based on approach direction)
+
+                bool isHorizontalWall = cell == '═' || cell == '─' || cell == '╦' || cell == '╩' || cell == '╬';
+                bool isVerticalWall = cell == '║' || cell == '│' || cell == '╣' || cell == '╠';
+
+                if (isHorizontalWall)
+                {
+                    // Hit a horizontal wall - reverse Y direction
+                    bullet.BounceY();
+                }
+                else if (isVerticalWall)
+                {
+                    // Hit a vertical wall - reverse X direction
+                    bullet.BounceX();
+                }
+                else
+                {
+                    // Corner or other wall character - determine based on approach direction
+                    // If moving more horizontally, likely hit vertical surface, reverse X
+                    // If moving more vertically, likely hit horizontal surface, reverse Y
+                    if (Math.Abs(bullet.VelocityX) > Math.Abs(bullet.VelocityY))
+                    {
+                        bullet.BounceX();
+                    }
+                    else if (Math.Abs(bullet.VelocityY) > Math.Abs(bullet.VelocityX))
+                    {
+                        bullet.BounceY();
+                    }
+                    else
+                    {
+                        // Equal diagonal - reverse both
+                        bullet.BounceX();
+                        bullet.BounceY();
+                    }
+                }
+
+                // Move bullet back to previous position to avoid getting stuck
+                bullet.X = prevX;
+                bullet.Y = prevY;
+            }
+        }
+    }
+
     private void UpdateBullets()
     {
         int currentWidth = Frame.Width;
@@ -888,31 +1190,9 @@ public class Game : Window
         {
             var bullet = _bullets[i];
 
-            // Check if bullet has expired (older than 2 seconds)
-            double ageSeconds = (_currentFrameTime - bullet.CreatedAt).TotalSeconds;
-            if (ageSeconds >= Bullet.LifetimeSeconds)
+            // Check if bullet has expired
+            if (HandleBulletExpiration(bullet, frameWidth, frameHeight, mapOffsetX, mapOffsetY, map))
             {
-                // Clear the expired bullet from screen before removing
-                int viewportX = (int)Math.Round(bullet.X) - mapOffsetX;
-                int viewportY = (int)Math.Round(bullet.Y) - mapOffsetY;
-
-                if (viewportX >= 0 && viewportX < frameWidth &&
-                    viewportY >= 0 && viewportY < frameHeight &&
-                    map != null && viewportY >= 0 && viewportY < map.Length &&
-                    viewportX >= 0 && viewportX < map[viewportY].Length)
-                {
-                    SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                    Move(viewportX, viewportY + StatusBarHeight);
-                    AddRune(map[viewportY][viewportX]);
-                    SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                }
-
-                // Publish bullet expired in multiplayer
-                if (_isMultiplayer && _gameSession != null && _grpcClient != null && bullet.PlayerId == _gameSession.PlayerId)
-                {
-                    PublishBulletUpdate(bullet, "expired");
-                }
-                
                 _bullets.RemoveAt(i);
                 continue;
             }
@@ -930,64 +1210,8 @@ public class Game : Window
                 PublishBulletUpdate(bullet, "updated");
             }
 
-            // Check for wall collision using world map coordinates
-            int bulletMapX = (int)Math.Round(bullet.X);
-            int bulletMapY = (int)Math.Round(bullet.Y);
-
-            // Wrap coordinates to map bounds
-            bulletMapX = _map.WrapX(bulletMapX);
-            bulletMapY = _map.WrapY(bulletMapY);
-
-            // Check if bullet hit a wall
-            if (_map.IsValidCoordinate(bulletMapX, bulletMapY))
-            {
-                char cell = _map.FullMap[bulletMapY][bulletMapX];
-                if (cell != ' ')
-                {
-                    // Hit a wall - determine wall type and bounce accordingly
-                    // Horizontal walls: ═, ─, ╦, ╩, ╬ (reverse Y)
-                    // Vertical walls: ║, │, ╣, ╠ (reverse X)
-                    // Corners: ╗, ╝, ╚, ╔ (determine based on approach direction)
-
-                    bool isHorizontalWall = cell == '═' || cell == '─' || cell == '╦' || cell == '╩' || cell == '╬';
-                    bool isVerticalWall = cell == '║' || cell == '│' || cell == '╣' || cell == '╠';
-
-                    if (isHorizontalWall)
-                    {
-                        // Hit a horizontal wall - reverse Y direction
-                        bullet.BounceY();
-                    }
-                    else if (isVerticalWall)
-                    {
-                        // Hit a vertical wall - reverse X direction
-                        bullet.BounceX();
-                    }
-                    else
-                    {
-                        // Corner or other wall character - determine based on approach direction
-                        // If moving more horizontally, likely hit vertical surface, reverse X
-                        // If moving more vertically, likely hit horizontal surface, reverse Y
-                        if (Math.Abs(bullet.VelocityX) > Math.Abs(bullet.VelocityY))
-                        {
-                            bullet.BounceX();
-                        }
-                        else if (Math.Abs(bullet.VelocityY) > Math.Abs(bullet.VelocityX))
-                        {
-                            bullet.BounceY();
-                        }
-                        else
-                        {
-                            // Equal diagonal - reverse both
-                            bullet.BounceX();
-                            bullet.BounceY();
-                        }
-                    }
-
-                    // Move bullet back to previous position to avoid getting stuck
-                    bullet.X = prevX;
-                    bullet.Y = prevY;
-                }
-            }
+            // Check for wall collision
+            HandleBulletWallCollision(bullet, prevX, prevY);
 
             // Check for bullet-snipe collision
             int bulletWorldX = (int)Math.Round(bullet.X);
@@ -995,273 +1219,14 @@ public class Game : Window
             bulletWorldX = _map.WrapX(bulletWorldX);
             bulletWorldY = _map.WrapY(bulletWorldY);
 
-            bool bulletRemoved = false;
-
-            for (int j = _snipes.Count - 1; j >= 0; j--)
-            {
-                var snipe = _snipes[j];
-                if (!snipe.IsAlive)
-                    continue;
-
-                // Check if bullet is at snipe position or arrow position
-                int snipeWorldX = _map.WrapX(snipe.X);
-                int snipeWorldY = _map.WrapY(snipe.Y);
-
-                // Check bullet at snipe position
-                if (bulletWorldX == snipeWorldX && bulletWorldY == snipeWorldY)
-                {
-                    // Bullet hit snipe - clear both bullet and snipe
-                    snipe.IsAlive = false;
-
-                    // Get fresh map to ensure we have correct character for clearing
-                    var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-
-                    // Clear snipe first (both '@' and arrow) - uses world coordinates
-                    ClearSnipePosition(snipe);
-
-                    // Clear bullet at collision point (use bullet's current position)
-                    int viewportX = bulletWorldX - mapOffsetX;
-                    int viewportY = bulletWorldY - mapOffsetY;
-                    if (viewportX >= 0 && viewportX < frameWidth &&
-                        viewportY >= 0 && viewportY < frameHeight &&
-                        freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
-                        viewportX >= 0 && viewportX < freshMap[viewportY].Length)
-                    {
-                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                        Move(viewportX, viewportY + StatusBarHeight);
-                        AddRune(freshMap[viewportY][viewportX]);
-                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                    }
-
-                    // Also clear bullet's previous position if different
-                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
-                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
-
-                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
-                    {
-                        int prevViewportX = prevBulletWorldX - mapOffsetX;
-                        int prevViewportY = prevBulletWorldY - mapOffsetY;
-                        if (prevViewportX >= 0 && prevViewportX < frameWidth &&
-                            prevViewportY >= 0 && prevViewportY < frameHeight &&
-                            freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
-                            prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
-                        {
-                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                            Move(prevViewportX, prevViewportY + StatusBarHeight);
-                            AddRune(freshMap[prevViewportY][prevViewportX]);
-                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                        }
-                    }
-
-                    // Invalidate cached map since we're removing entities
-                    _cachedMapViewport = null;
-
-                    // Remove from lists AFTER clearing
-                    _snipes.RemoveAt(j);
-                    _bullets.RemoveAt(i);
-                    _gameState.SnipesUndestroyed--;
-                    _gameState.Score += SnipeKillScore;
-                    _player.Score += SnipeKillScore;
-                    bulletRemoved = true;
-                    
-                    // Check for level completion (host only in multiplayer)
-                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
-                    {
-                        CheckLevelComplete();
-                    }
-                    
-                    break; // Bullet is removed, exit snipe loop
-                }
-
-                // Check bullet at arrow position
-                int arrowWorldX = snipeWorldX + (snipe.DirectionX < 0 ? -1 : 1);
-                arrowWorldX = _map.WrapX(arrowWorldX);
-                if (bulletWorldX == arrowWorldX && bulletWorldY == snipeWorldY)
-                {
-                    // Bullet hit snipe arrow - clear both bullet and snipe
-                    snipe.IsAlive = false;
-
-                    // Get fresh map to ensure we have correct character for clearing
-                    var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-
-                    // Clear snipe first (both '@' and arrow) - uses world coordinates
-                    ClearSnipePosition(snipe);
-
-                    // Clear bullet at collision point
-                    int viewportX = bulletWorldX - mapOffsetX;
-                    int viewportY = bulletWorldY - mapOffsetY;
-                    if (viewportX >= 0 && viewportX < frameWidth &&
-                        viewportY >= 0 && viewportY < frameHeight &&
-                        freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
-                        viewportX >= 0 && viewportX < freshMap[viewportY].Length)
-                    {
-                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                        Move(viewportX, viewportY + StatusBarHeight);
-                        AddRune(freshMap[viewportY][viewportX]);
-                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                    }
-
-                    // Also clear bullet's previous position if different
-                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
-                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
-
-                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
-                    {
-                        int prevViewportX = prevBulletWorldX - mapOffsetX;
-                        int prevViewportY = prevBulletWorldY - mapOffsetY;
-                        if (prevViewportX >= 0 && prevViewportX < frameWidth &&
-                            prevViewportY >= 0 && prevViewportY < frameHeight &&
-                            freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
-                            prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
-                        {
-                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                            Move(prevViewportX, prevViewportY + StatusBarHeight);
-                            AddRune(freshMap[prevViewportY][prevViewportX]);
-                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                        }
-                    }
-
-                    // Invalidate cached map since we're removing entities
-                    _cachedMapViewport = null;
-
-                    // Remove from lists AFTER clearing
-                    _snipes.RemoveAt(j);
-                    _bullets.RemoveAt(i);
-                    _gameState.SnipesUndestroyed--;
-                    _gameState.Score += SnipeKillScore;
-                    _player.Score += SnipeKillScore;
-                    bulletRemoved = true;
-                    
-                    // Check for level completion (host only in multiplayer)
-                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
-                    {
-                        CheckLevelComplete();
-                    }
-                    
-                    break; // Bullet is removed, exit snipe loop
-                }
-            }
+            bool bulletRemoved = HandleBulletSnipeCollision(bullet, bulletWorldX, bulletWorldY, 
+                                                           frameWidth, frameHeight, mapOffsetX, mapOffsetY, i);
 
             // Check for bullet-hive collision (only if bullet still exists)
             if (!bulletRemoved)
             {
-                bulletWorldX = (int)Math.Round(bullet.X);
-                bulletWorldY = (int)Math.Round(bullet.Y);
-                bulletWorldX = _map.WrapX(bulletWorldX);
-                bulletWorldY = _map.WrapY(bulletWorldY);
-
-                foreach (var hive in _hives)
-                {
-                    if (hive.IsDestroyed)
-                        continue;
-
-                    // Check if bullet is within hive bounds (2x2 area)
-                    // Hive occupies: [X, X+1] columns, [Y, Y+1] rows
-                    int hiveWorldX = _map.WrapX(hive.X);
-                    int hiveWorldY = _map.WrapY(hive.Y);
-                    int hiveWorldX2 = _map.WrapX(hiveWorldX + 1);
-                    int hiveWorldY2 = _map.WrapY(hiveWorldY + 1);
-
-                    // Check if bullet is within the 2x2 hive area
-                    bool inHiveX = (bulletWorldX == hiveWorldX || bulletWorldX == hiveWorldX2);
-                    bool inHiveY = (bulletWorldY == hiveWorldY || bulletWorldY == hiveWorldY2);
-
-                    if (inHiveX && inHiveY)
-                    {
-                        // Bullet hit hive
-                        hive.Hits++;
-
-                        // Reduce flash rate by 1/3 (for this hive only)
-                        hive.FlashIntervalMs = (int)(hive.FlashIntervalMs * 2.0 / 3.0);
-                        if (hive.FlashIntervalMs < 10) hive.FlashIntervalMs = 10; // Minimum 10ms
-
-                        // Get fresh map to ensure we have correct character for clearing
-                        var freshMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-
-                        // Clear bullet at collision point
-                        int viewportX = bulletWorldX - mapOffsetX;
-                        int viewportY = bulletWorldY - mapOffsetY;
-                        if (viewportX >= 0 && viewportX < frameWidth &&
-                            viewportY >= 0 && viewportY < frameHeight &&
-                            freshMap != null && viewportY >= 0 && viewportY < freshMap.Length &&
-                            viewportX >= 0 && viewportX < freshMap[viewportY].Length)
-                        {
-                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                            Move(viewportX, viewportY + StatusBarHeight);
-                            AddRune(freshMap[viewportY][viewportX]);
-                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                        }
-
-                        // Also clear bullet's previous position if different
-                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
-                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
-
-                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
-                        {
-                            int prevViewportX = prevBulletWorldX - mapOffsetX;
-                            int prevViewportY = prevBulletWorldY - mapOffsetY;
-                            if (prevViewportX >= 0 && prevViewportX < frameWidth &&
-                                prevViewportY >= 0 && prevViewportY < frameHeight &&
-                                freshMap != null && prevViewportY >= 0 && prevViewportY < freshMap.Length &&
-                                prevViewportX >= 0 && prevViewportX < freshMap[prevViewportY].Length)
-                            {
-                                SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                                Move(prevViewportX, prevViewportY + StatusBarHeight);
-                                AddRune(freshMap[prevViewportY][prevViewportX]);
-                                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                            }
-                        }
-
-                        // Invalidate cached map since we're removing a bullet
-                        _cachedMapViewport = null;
-
-                        // Publish bullet hit in multiplayer (host only)
-                        if (_isMultiplayer && _gameSession != null && _grpcClient != null && 
-                            _gameSession.Role == GameSessionRole.Host && bullet.PlayerId == _gameSession.PlayerId)
-                        {
-                            PublishBulletUpdate(bullet, "hit", "hive", $"hive_{hive.X}_{hive.Y}");
-                        }
-                        
-                        _bullets.RemoveAt(i);
-                        bulletRemoved = true;
-
-                        // Check if hive is destroyed (3 hits)
-                        if (hive.Hits >= Hive.HitsToDestroy)
-                        {
-                            hive.IsDestroyed = true;
-                            _gameState.HivesUndestroyed--;
-
-                            // Clear hive from screen immediately
-                            ClearHivePosition(hive);
-
-                            // Kill all unreleased snipes from this hive
-                            int unreleasedSnipes = hive.SnipesRemaining;
-
-                            // Add score: base score for hive + score per unreleased snipe
-                            int hiveScore = HiveBaseScore + (unreleasedSnipes * SnipePerHiveScore);
-                            _gameState.Score += hiveScore;
-                            _player.Score += hiveScore;
-
-                            // Update total snipes count (unreleased snipes are now gone)
-                            _gameState.SnipesUndestroyed -= unreleasedSnipes;
-                            _gameState.TotalSnipes -= unreleasedSnipes;
-                            
-                            // Check for level completion (host only in multiplayer)
-                            if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
-                            {
-                                CheckLevelComplete();
-                            }
-                        }
-
-                        break; // Bullet is removed, exit hive loop
-                    }
-                }
+                bulletRemoved = HandleBulletHiveCollision(bullet, bulletWorldX, bulletWorldY, 
+                                                         frameWidth, frameHeight, mapOffsetX, mapOffsetY, i);
             }
             
             // Check for bullet-to-player collision (host only, for all bullets)
@@ -1740,6 +1705,163 @@ public class Game : Window
         return false;
     }
 
+    /// <summary>
+    /// Calculates the preferred direction for a snipe to move toward the player
+    /// </summary>
+    private (int preferredDirX, int preferredDirY) CalculatePreferredDirection(Snipe snipe)
+    {
+        int deltaX = _player.X - snipe.X;
+        int deltaY = _player.Y - snipe.Y;
+
+        // Handle map wrapping - find shortest path
+        _map.WrapDeltaX(ref deltaX);
+        _map.WrapDeltaY(ref deltaY);
+
+        int preferredDirX = 0;
+        int preferredDirY = 0;
+
+        if (Math.Abs(deltaX) > Math.Abs(deltaY))
+        {
+            // Move horizontally first
+            preferredDirX = deltaX > 0 ? 1 : (deltaX < 0 ? -1 : 0);
+            if (preferredDirX == 0 && deltaY != 0)
+                preferredDirY = deltaY > 0 ? 1 : -1;
+        }
+        else
+        {
+            // Move vertically first
+            preferredDirY = deltaY > 0 ? 1 : (deltaY < 0 ? -1 : 0);
+            if (preferredDirY == 0 && deltaX != 0)
+                preferredDirX = deltaX > 0 ? 1 : -1;
+        }
+
+        return (preferredDirX, preferredDirY);
+    }
+
+    /// <summary>
+    /// Gets all valid directions a snipe can move
+    /// </summary>
+    private List<(int dx, int dy)> GetValidDirections(Snipe snipe)
+    {
+        List<(int dx, int dy)> possibleDirections = new List<(int, int)>(8); // Max 8 directions
+
+        // Try all 8 possible directions (including diagonals)
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                if (dx == 0 && dy == 0)
+                    continue; // Skip no movement
+
+                int testX = snipe.X + dx;
+                int testY = snipe.Y + dy;
+
+                if (IsSnipePositionValid(testX, testY, dx, dy))
+                {
+                    possibleDirections.Add((dx, dy));
+                }
+            }
+        }
+
+        return possibleDirections;
+    }
+
+    /// <summary>
+    /// Handles collisions between a snipe and other snipes
+    /// </summary>
+    private void HandleSnipeSnipeCollisions(Snipe snipe, int snipeIndex)
+    {
+        for (int j = 0; j < _snipes.Count; j++)
+        {
+            if (snipeIndex == j || !_snipes[j].IsAlive)
+                continue;
+
+            var otherSnipe = _snipes[j];
+            if (CheckSnipeSnipeCollision(snipe, otherSnipe))
+            {
+                // Snipes collided - bounce (reverse direction)
+                snipe.DirectionX = -snipe.DirectionX;
+                snipe.DirectionY = -snipe.DirectionY;
+                otherSnipe.DirectionX = -otherSnipe.DirectionX;
+                otherSnipe.DirectionY = -otherSnipe.DirectionY;
+
+                // Move snipes back to previous positions to avoid overlap
+                snipe.X = snipe.PreviousX;
+                snipe.Y = snipe.PreviousY;
+                otherSnipe.X = otherSnipe.PreviousX;
+                otherSnipe.Y = otherSnipe.PreviousY;
+
+                // Wrap coordinates
+                snipe.X = _map.WrapX(snipe.X);
+                snipe.Y = _map.WrapY(snipe.Y);
+                otherSnipe.X = _map.WrapX(otherSnipe.X);
+                otherSnipe.Y = _map.WrapY(otherSnipe.Y);
+
+                break; // Only handle one collision per update
+            }
+        }
+    }
+
+    /// <summary>
+    /// Calculates the direction a snipe should move based on heat radius and valid directions
+    /// </summary>
+    private (int dx, int dy) CalculateSnipeDirection(Snipe snipe, List<(int dx, int dy)> possibleDirections, 
+                                                       (int preferredDirX, int preferredDirY) preferredDir, double heatFactor)
+    {
+        bool currentDirectionValid = possibleDirections.Contains((snipe.DirectionX, snipe.DirectionY));
+
+        if (currentDirectionValid && heatFactor < 0.3)
+        {
+            // Current direction is valid and player is far - wander through maze
+            // Occasionally change direction to explore (20% chance)
+            if (Random.Shared.Next(100) < 20)
+            {
+                // Choose a random valid direction to explore
+                return possibleDirections[Random.Shared.Next(possibleDirections.Count)];
+            }
+            else
+            {
+                // Continue in current direction
+                return (snipe.DirectionX, snipe.DirectionY);
+            }
+        }
+        else if (heatFactor > 0.3 && (preferredDir.preferredDirX != 0 || preferredDir.preferredDirY != 0))
+        {
+            // Player is close (heat radius) - prefer moving toward player
+            bool preferredValid = possibleDirections.Contains((preferredDir.preferredDirX, preferredDir.preferredDirY));
+
+            if (preferredValid)
+            {
+                // Prefer moving toward player, but allow continuing current direction if it's also toward player
+                if (currentDirectionValid && snipe.DirectionX == preferredDir.preferredDirX && snipe.DirectionY == preferredDir.preferredDirY)
+                {
+                    // Current direction is toward player - continue
+                    return (snipe.DirectionX, snipe.DirectionY);
+                }
+                else
+                {
+                    // Change direction to move toward player
+                    return (preferredDir.preferredDirX, preferredDir.preferredDirY);
+                }
+            }
+            else if (currentDirectionValid)
+            {
+                // Preferred direction not valid, but current direction is - continue
+                return (snipe.DirectionX, snipe.DirectionY);
+            }
+            else
+            {
+                // Hit a wall and player is close - randomly choose from valid directions
+                return possibleDirections[Random.Shared.Next(possibleDirections.Count)];
+            }
+        }
+        else
+        {
+            // Current direction hit a wall (not valid) and player is far - randomly choose new direction
+            return possibleDirections[Random.Shared.Next(possibleDirections.Count)];
+        }
+    }
+
     private void UpdateSnipes()
     {
         for (int i = _snipes.Count - 1; i >= 0; i--)
@@ -1785,47 +1907,10 @@ public class Game : Window
             // heatFactor: 1.0 when at player, 0.0 when at maxHeatRadius or beyond
 
             // Determine preferred direction (toward player)
-            int preferredDirX = 0;
-            int preferredDirY = 0;
-
-            if (Math.Abs(deltaX) > Math.Abs(deltaY))
-            {
-                // Move horizontally first
-                preferredDirX = deltaX > 0 ? 1 : (deltaX < 0 ? -1 : 0);
-                if (preferredDirX == 0 && deltaY != 0)
-                    preferredDirY = deltaY > 0 ? 1 : -1;
-            }
-            else
-            {
-                // Move vertically first
-                preferredDirY = deltaY > 0 ? 1 : (deltaY < 0 ? -1 : 0);
-                if (preferredDirY == 0 && deltaX != 0)
-                    preferredDirX = deltaX > 0 ? 1 : -1;
-            }
-
-            // Note: PreviousX/PreviousY are updated at the end of DrawSnipes()
-            // to match what was actually drawn. We don't update them here.
+            var preferredDir = CalculatePreferredDirection(snipe);
 
             // Get all possible valid directions
-            List<(int dx, int dy)> possibleDirections = new List<(int, int)>(8); // Max 8 directions
-
-            // Try all 8 possible directions (including diagonals)
-            for (int dx = -1; dx <= 1; dx++)
-            {
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    if (dx == 0 && dy == 0)
-                        continue; // Skip no movement
-
-                    int testX = snipe.X + dx;
-                    int testY = snipe.Y + dy;
-
-                    if (IsSnipePositionValid(testX, testY, dx, dy))
-                    {
-                        possibleDirections.Add((dx, dy));
-                    }
-                }
-            }
+            var possibleDirections = GetValidDirections(snipe);
 
             if (possibleDirections.Count == 0)
             {
@@ -1834,63 +1919,8 @@ public class Game : Window
                 continue;
             }
 
-            // Determine direction choice based on rules:
-            // 1. Try to continue in current direction if valid (unless player is close)
-            // 2. If current direction hits wall, choose new direction
-            // 3. If player is close (heat radius), prefer moving toward player
-            (int dx, int dy) chosenDirection;
-            bool currentDirectionValid = possibleDirections.Contains((snipe.DirectionX, snipe.DirectionY));
-
-            if (currentDirectionValid && heatFactor < 0.3)
-            {
-                // Current direction is valid and player is far - wander through maze
-                // Occasionally change direction to explore (20% chance)
-                if (Random.Shared.Next(100) < 20)
-                {
-                    // Choose a random valid direction to explore
-                    chosenDirection = possibleDirections[Random.Shared.Next(possibleDirections.Count)];
-                }
-                else
-                {
-                    // Continue in current direction
-                    chosenDirection = (snipe.DirectionX, snipe.DirectionY);
-                }
-            }
-            else if (heatFactor > 0.3 && (preferredDirX != 0 || preferredDirY != 0))
-            {
-                // Player is close (heat radius) - prefer moving toward player
-                bool preferredValid = possibleDirections.Contains((preferredDirX, preferredDirY));
-
-                if (preferredValid)
-                {
-                    // Prefer moving toward player, but allow continuing current direction if it's also toward player
-                    if (currentDirectionValid && snipe.DirectionX == preferredDirX && snipe.DirectionY == preferredDirY)
-                    {
-                        // Current direction is toward player - continue
-                        chosenDirection = (snipe.DirectionX, snipe.DirectionY);
-                    }
-                    else
-                    {
-                        // Change direction to move toward player
-                        chosenDirection = (preferredDirX, preferredDirY);
-                    }
-                }
-                else if (currentDirectionValid)
-                {
-                    // Preferred direction not valid, but current direction is - continue
-                    chosenDirection = (snipe.DirectionX, snipe.DirectionY);
-                }
-                else
-                {
-                    // Hit a wall and player is close - randomly choose from valid directions
-                    chosenDirection = possibleDirections[Random.Shared.Next(possibleDirections.Count)];
-                }
-            }
-            else
-            {
-                // Current direction hit a wall (not valid) and player is far - randomly choose new direction
-                chosenDirection = possibleDirections[Random.Shared.Next(possibleDirections.Count)];
-            }
+            // Determine direction choice based on rules
+            var chosenDirection = CalculateSnipeDirection(snipe, possibleDirections, preferredDir, heatFactor);
 
             // Move snipe
             int newSnipeX = snipe.X + chosenDirection.dx;
@@ -1902,167 +1932,106 @@ public class Game : Window
             snipe.LastMoveTime = _currentFrameTime;
 
             // Check for collision with other snipes
-            for (int j = 0; j < _snipes.Count; j++)
-            {
-                if (i == j || !_snipes[j].IsAlive)
-                    continue;
-
-                var otherSnipe = _snipes[j];
-                if (CheckSnipeSnipeCollision(snipe, otherSnipe))
-                {
-                    // Snipes collided - bounce (reverse direction)
-                    snipe.DirectionX = -snipe.DirectionX;
-                    snipe.DirectionY = -snipe.DirectionY;
-                    otherSnipe.DirectionX = -otherSnipe.DirectionX;
-                    otherSnipe.DirectionY = -otherSnipe.DirectionY;
-
-                    // Move snipes back to previous positions to avoid overlap
-                    snipe.X = snipe.PreviousX;
-                    snipe.Y = snipe.PreviousY;
-                    otherSnipe.X = otherSnipe.PreviousX;
-                    otherSnipe.Y = otherSnipe.PreviousY;
-
-                    // Wrap coordinates
-                    snipe.X = _map.WrapX(snipe.X);
-                    snipe.Y = _map.WrapY(snipe.Y);
-                    otherSnipe.X = _map.WrapX(otherSnipe.X);
-                    otherSnipe.Y = _map.WrapY(otherSnipe.Y);
-
-                    break; // Only handle one collision per update
-                }
-            }
+            HandleSnipeSnipeCollisions(snipe, i);
 
             // Check collision with bullets (snipe moving into bullet)
-            int snipeWorldX = _map.WrapX(snipe.X);
-            int snipeWorldY = _map.WrapY(snipe.Y);
-
-            for (int k = _bullets.Count - 1; k >= 0; k--)
-            {
-                var bullet = _bullets[k];
-                int bulletWorldX = (int)Math.Round(bullet.X);
-                int bulletWorldY = (int)Math.Round(bullet.Y);
-                bulletWorldX = _map.WrapX(bulletWorldX);
-                bulletWorldY = _map.WrapY(bulletWorldY);
-
-                // Check if snipe is at bullet position
-                if (snipeWorldX == bulletWorldX && snipeWorldY == bulletWorldY)
-                {
-                    // Snipe moved into bullet - clear both bullet and snipe
-                    snipe.IsAlive = false;
-
-                    // Get fresh map to ensure we have correct character for clearing
-                    int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Frame.Width;
-                    int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Frame.Height - StatusBarHeight);
-                    var bulletMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-                    int mapOffsetX = _player.X - (frameWidth / 2);
-                    int mapOffsetY = _player.Y - (frameHeight / 2);
-                    int viewportX = bulletWorldX - mapOffsetX;
-                    int viewportY = bulletWorldY - mapOffsetY;
-                    if (viewportX >= 0 && viewportX < frameWidth &&
-                        viewportY >= 0 && viewportY < frameHeight &&
-                        bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
-                        viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
-                    {
-                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                        Move(viewportX, viewportY + StatusBarHeight);
-                        AddRune(bulletMap[viewportY][viewportX]);
-                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                    }
-
-                    // Clear snipe first (both '@' and arrow) - uses world coordinates
-                    ClearSnipePosition(snipe);
-
-                    // Clear bullet at collision point
-                    if (viewportX >= 0 && viewportX < frameWidth &&
-                        viewportY >= 0 && viewportY < frameHeight &&
-                        bulletMap != null && viewportY >= 0 && viewportY < bulletMap.Length &&
-                        viewportX >= 0 && viewportX < bulletMap[viewportY].Length)
-                    {
-                        SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                        Move(viewportX, viewportY + StatusBarHeight);
-                        AddRune(bulletMap[viewportY][viewportX]);
-                        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                    }
-
-                    // Also clear bullet's previous position if different
-                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
-                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
-
-                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
-                    {
-                        int prevViewportX = prevBulletWorldX - mapOffsetX;
-                        int prevViewportY = prevBulletWorldY - mapOffsetY;
-                        if (prevViewportX >= 0 && prevViewportX < frameWidth &&
-                            prevViewportY >= 0 && prevViewportY < frameHeight &&
-                            bulletMap != null && prevViewportY >= 0 && prevViewportY < bulletMap.Length &&
-                            prevViewportX >= 0 && prevViewportX < bulletMap[prevViewportY].Length)
-                        {
-                            SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-                            Move(prevViewportX, prevViewportY + StatusBarHeight);
-                            AddRune(bulletMap[prevViewportY][prevViewportX]);
-                            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-                        }
-                    }
-
-                    // Invalidate cached map since we're removing entities
-                    _cachedMapViewport = null;
-
-                    // Remove from lists AFTER clearing
-                    _snipes.RemoveAt(i);
-                    _bullets.RemoveAt(k);
-                    _gameState.SnipesUndestroyed--;
-                    _gameState.Score += SnipeKillScore;
-                    _player.Score += SnipeKillScore;
-                    
-                    // Check for level completion (host only in multiplayer)
-                    if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
-                    {
-                        CheckLevelComplete();
-                    }
-                    
-                    // Snipe is removed, continue to next snipe
-                    goto nextSnipe;
-                }
-            }
+            HandleSnipeBulletCollision(snipe, i);
 
             // Check collision with player (only if snipe is still alive and game is not over)
-            if (!snipe.IsAlive)
-                goto nextSnipe;
-
-            // Don't check collision if game is over
-            if (_introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
-                goto nextSnipe;
-
-            if (CheckSnipePlayerCollision(snipe))
+            if (snipe.IsAlive && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                // Snipe explodes, player loses a life
-                snipe.IsAlive = false;
-                _player.Lives--;
-                
-                if (_player.Lives > 0)
-                {
-                    // Respawn player at random position with clearing effect
-                    var (x, y) = FindRandomValidPosition();
-                    _player.X = x;
-                    _player.Y = y;
-                    // Invalidate cached map viewport since player moved
-                    _cachedMapViewport = null;
-                    // Trigger clearing effect with lives message
-                    _introScreen.StartClearingEffect($"{_player.Lives} Lives Left");
-                }
-                else
-                {
-                    // Game over for this player
-                    _player.IsAlive = false;
-                    
-                    // Check if all players are dead (game over for everyone)
-                    CheckGameOver();
-                }
+                HandleSnipePlayerCollision(snipe);
             }
+        }
+    }
 
-        nextSnipe:; // Label for continue after snipe removal
+    /// <summary>
+    /// Handles collision between a snipe and bullets
+    /// </summary>
+    private void HandleSnipeBulletCollision(Snipe snipe, int snipeIndex)
+    {
+        int snipeWorldX = _map.WrapX(snipe.X);
+        int snipeWorldY = _map.WrapY(snipe.Y);
+
+        for (int k = _bullets.Count - 1; k >= 0; k--)
+        {
+            var bullet = _bullets[k];
+            int bulletWorldX = (int)Math.Round(bullet.X);
+            int bulletWorldY = (int)Math.Round(bullet.Y);
+            bulletWorldX = _map.WrapX(bulletWorldX);
+            bulletWorldY = _map.WrapY(bulletWorldY);
+
+            // Check if snipe is at bullet position
+            if (snipeWorldX == bulletWorldX && snipeWorldY == bulletWorldY)
+            {
+                // Snipe moved into bullet - clear both bullet and snipe
+                snipe.IsAlive = false;
+
+                // Get fresh map to ensure we have correct character for clearing
+                int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : Frame.Width;
+                int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (Frame.Height - StatusBarHeight);
+                var bulletMap = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+                int mapOffsetX = _player.X - (frameWidth / 2);
+                int mapOffsetY = _player.Y - (frameHeight / 2);
+
+                // Clear snipe first (both '@' and arrow) - uses world coordinates
+                ClearSnipePosition(snipe);
+
+                // Clear bullet at collision point and previous position
+                ClearBulletAndPreviousPosition(bullet, bulletWorldX, bulletWorldY, 
+                                              frameWidth, frameHeight, mapOffsetX, mapOffsetY, bulletMap);
+
+                // Invalidate cached map since we're removing entities
+                _cachedMapViewport = null;
+
+                // Remove from lists AFTER clearing
+                _snipes.RemoveAt(snipeIndex);
+                _bullets.RemoveAt(k);
+                _gameState.SnipesUndestroyed--;
+                _gameState.Score += SnipeKillScore;
+                _player.Score += SnipeKillScore;
+                
+                // Check for level completion (host only in multiplayer)
+                if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                {
+                    CheckLevelComplete();
+                }
+                
+                return; // Snipe removed, exit
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handles collision between a snipe and the player
+    /// </summary>
+    private void HandleSnipePlayerCollision(Snipe snipe)
+    {
+        if (CheckSnipePlayerCollision(snipe))
+        {
+            // Snipe explodes, player loses a life
+            snipe.IsAlive = false;
+            _player.Lives--;
+            
+            if (_player.Lives > 0)
+            {
+                // Respawn player at random position with clearing effect
+                var (x, y) = FindRandomValidPosition();
+                _player.X = x;
+                _player.Y = y;
+                // Invalidate cached map viewport since player moved
+                _cachedMapViewport = null;
+                // Trigger clearing effect with lives message
+                _introScreen.StartClearingEffect($"{_player.Lives} Lives Left");
+            }
+            else
+            {
+                // Game over for this player
+                _player.IsAlive = false;
+                
+                // Check if all players are dead (game over for everyone)
+                CheckGameOver();
+            }
         }
     }
 
@@ -2074,26 +2043,11 @@ public class Game : Window
                snipe.Y >= _player.Y && snipe.Y <= _player.Y + (PlayerHeight - 1);
     }
 
-    private void DrawSnipes()
+    /// <summary>
+    /// Builds a set of positions that snipes previously occupied (for clearing)
+    /// </summary>
+    private HashSet<(int x, int y)> BuildPreviousSnipePositions()
     {
-        
-
-        int currentWidth = Frame.Width;
-        int currentHeight = Frame.Height;
-        int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
-        int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
-
-        // Use cached map viewport if available, otherwise get new one
-        var map = _cachedMapViewport;
-        if (map == null || map.Length != frameHeight)
-        {
-            map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-            _cachedMapViewport = map;
-        }
-
-        // Step 1: Build a list of all positions that snipes PREVIOUSLY occupied
-        // This includes both '@' character positions and arrow positions from the last frame
-        // We ALWAYS add previous positions, even if snipe hasn't moved (direction might have changed)
         HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>(_snipes.Count * 2); // Each snipe has 2 positions (@ + arrow)
 
         foreach (var snipe in _snipes)
@@ -2127,8 +2081,14 @@ public class Game : Window
             positionsToClear.Add((prevArrowWorldX, prevWorldY));
         }
 
-        // Step 2: Build a set of all positions that snipes CURRENTLY occupy
-        // Remove these from the positionsToClear set (don't clear positions that are still occupied)
+        return positionsToClear;
+    }
+
+    /// <summary>
+    /// Removes current snipe positions from the positions to clear set
+    /// </summary>
+    private void RemoveCurrentSnipePositions(HashSet<(int x, int y)> positionsToClear)
+    {
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
@@ -2156,8 +2116,13 @@ public class Game : Window
             positionsToClear.Remove((charWorldX, snipeWorldY));
             positionsToClear.Remove((arrowWorldX, snipeWorldY));
         }
+    }
 
-        // Step 3: Clear all positions that remain in positionsToClear (no longer occupied)
+    /// <summary>
+    /// Clears snipe positions that are no longer occupied
+    /// </summary>
+    private void ClearSnipePreviousPositions(HashSet<(int x, int y)> positionsToClear, int frameWidth, int frameHeight)
+    {
         SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
         foreach (var (worldX, worldY) in positionsToClear)
         {
@@ -2181,66 +2146,67 @@ public class Game : Window
                 AddRune(mapChar);
             }
         }
+    }
 
-        // Step 4: Draw snipes at their new positions
-        foreach (var snipe in _snipes)
+    /// <summary>
+    /// Draws a single snipe at its current position
+    /// </summary>
+    private void DrawSnipeAtPosition(Snipe snipe, int frameWidth, int frameHeight)
+    {
+        // Calculate viewport coordinates
+        int deltaX = snipe.X - _player.X;
+        int deltaY = snipe.Y - _player.Y;
+
+        // Handle wrapping
+        _map.WrapDeltaX(ref deltaX);
+        _map.WrapDeltaY(ref deltaY);
+
+        int viewportX = (frameWidth / 2) + deltaX;
+        int viewportY = (frameHeight / 2) + deltaY;
+
+        // Only draw if within viewport
+        if (viewportX >= 0 && viewportX < frameWidth &&
+            viewportY >= 0 && viewportY < frameHeight)
         {
-            if (!snipe.IsAlive)
-                continue;
+            // Set color based on snipe type: 'A' = magenta, 'B' = green
+            var snipeColor = snipe.Type == 'A' ? Color.Magenta : Color.Green;
+            SetAttribute(new DrawingAttribute(snipeColor, Color.Black));
 
-            // Calculate viewport coordinates (same logic as hives)
-            int deltaX = snipe.X - _player.X;
-            int deltaY = snipe.Y - _player.Y;
-
-            // Handle wrapping
-            _map.WrapDeltaX(ref deltaX);
-            _map.WrapDeltaY(ref deltaY);
-
-            int viewportX = (frameWidth / 2) + deltaX;
-            int viewportY = (frameHeight / 2) + deltaY;
-
-            // Only draw if within viewport
-            if (viewportX >= 0 && viewportX < frameWidth &&
-                viewportY >= 0 && viewportY < frameHeight)
+            // Draw order depends on direction:
+            // Moving left: arrow first, then character
+            // Moving right or other: character first, then arrow
+            if (snipe.DirectionX < 0)
             {
-                // Set color based on snipe type: 'A' = magenta, 'B' = green
-                var snipeColor = snipe.Type == 'A' ? Color.Magenta : Color.Green;
-                SetAttribute(new DrawingAttribute(snipeColor, Color.Black));
+                // Moving left - draw arrow first, then character
+                Move(viewportX, viewportY + StatusBarHeight);
+                AddRune(snipe.GetDirectionArrow());
 
-                // Draw order depends on direction:
-                // Moving left: arrow first, then character
-                // Moving right or other: character first, then arrow
-                if (snipe.DirectionX < 0)
+                if (viewportX + 1 < frameWidth)
                 {
-                    // Moving left - draw arrow first, then character
-                    Move(viewportX, viewportY + StatusBarHeight);
-                    AddRune(snipe.GetDirectionArrow());
-
-                    if (viewportX + 1 < frameWidth)
-                    {
-                        Move(viewportX + 1, viewportY + StatusBarHeight);
-                        AddRune(snipe.GetDisplayChar());
-                    }
-                }
-                else
-                {
-                    // Moving right or other directions - draw character first, then arrow
-                    Move(viewportX, viewportY + StatusBarHeight);
+                    Move(viewportX + 1, viewportY + StatusBarHeight);
                     AddRune(snipe.GetDisplayChar());
+                }
+            }
+            else
+            {
+                // Moving right or other directions - draw character first, then arrow
+                Move(viewportX, viewportY + StatusBarHeight);
+                AddRune(snipe.GetDisplayChar());
 
-                    if (viewportX + 1 < frameWidth)
-                    {
-                        Move(viewportX + 1, viewportY + StatusBarHeight);
-                        AddRune(snipe.GetDirectionArrow());
-                    }
+                if (viewportX + 1 < frameWidth)
+                {
+                    Move(viewportX + 1, viewportY + StatusBarHeight);
+                    AddRune(snipe.GetDirectionArrow());
                 }
             }
         }
+    }
 
-        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-
-        // CRITICAL: Update PreviousX/PreviousY to match what was actually drawn
-        // This ensures that on the next frame, we clear the correct positions
+    /// <summary>
+    /// Updates PreviousX/PreviousY for all snipes to match what was actually drawn
+    /// </summary>
+    private void UpdateSnipePreviousPositions()
+    {
         foreach (var snipe in _snipes)
         {
             if (!snipe.IsAlive)
@@ -2252,6 +2218,45 @@ public class Game : Window
             snipe.PreviousDirectionX = snipe.DirectionX;
             snipe.PreviousDirectionY = snipe.DirectionY;
         }
+    }
+
+    private void DrawSnipes()
+    {
+        int currentWidth = Frame.Width;
+        int currentHeight = Frame.Height;
+        int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
+        int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
+
+        // Use cached map viewport if available, otherwise get new one
+        var map = _cachedMapViewport;
+        if (map == null || map.Length != frameHeight)
+        {
+            map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+            _cachedMapViewport = map;
+        }
+
+        // Step 1: Build a list of all positions that snipes PREVIOUSLY occupied
+        var positionsToClear = BuildPreviousSnipePositions();
+
+        // Step 2: Remove current positions from clear list (don't clear positions that are still occupied)
+        RemoveCurrentSnipePositions(positionsToClear);
+
+        // Step 3: Clear all positions that remain in positionsToClear (no longer occupied)
+        ClearSnipePreviousPositions(positionsToClear, frameWidth, frameHeight);
+
+        // Step 4: Draw snipes at their new positions
+        foreach (var snipe in _snipes)
+        {
+            if (!snipe.IsAlive)
+                continue;
+
+            DrawSnipeAtPosition(snipe, frameWidth, frameHeight);
+        }
+
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+
+        // CRITICAL: Update PreviousX/PreviousY to match what was actually drawn
+        UpdateSnipePreviousPositions();
     }
 
     // Callback for IntroScreen to get map character at position during clearing effect
