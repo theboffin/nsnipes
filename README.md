@@ -188,7 +188,8 @@ So what's left to do:
 - Menu navigation:
   - Arrow keys or numeric keypad (2/8) to navigate
   - ENTER to select
-  - Keyboard shortcuts: S (Start), J (Join), I (Initials), E/X (Exit)
+  - Keyboard shortcuts: S (Start), J (Join), I (Initials), C (Configure Server), E/X (Exit)
+- Menu highlighting: First letter of each menu item highlighted in Cyan (was Yellow)
 - Initials are saved to `nsnipes.json` and persist between game sessions
 - Default initials are "AA" if not set
 
@@ -343,10 +344,20 @@ So what's left to do:
   - Two demo players (BD white, NP yellow) with intelligent movement AI
   - Players maintain direction for 3-8 moves before changing, creating smoother movement patterns
   - Players avoid menu/logo areas, avoid each other, and home in on nearby snipes
+  - Players can occasionally pause (15% chance) for more realistic behavior
   - Snipes spawn from menu edges (mix of TypeA magenta and TypeB green)
-  - Snipes move away from players with improved movement frequency
-  - Players shoot red '*' bullets toward nearest snipes (matching game bullet speed)
+  - Snipes move with direction persistence (5-12 moves before changing direction)
+  - Snipes reverse direction when reaching screen edges
+  - **Snipe Rendering**: Snipes display correctly with arrow to the side (not underneath), matching game format
+    - Moving left: arrow first, then '@' character
+    - Moving right or other: '@' character first, then arrow
+  - Players shoot red '*' bullets toward nearest snipes
+  - **Bullet Behavior**: Bullets bounce off screen edges (matching game's wall bouncing behavior)
+  - **Bullet Speed**: Reduced to 8.0 per update for better visibility in demo
+  - **Burst Fire**: Players occasionally fire bursts of 3 bullets in quick succession (15% chance, 100ms between bullets)
+  - **Shooting Frequency**: Reduced to 1200ms between shots for more realistic demo pacing
   - Bullet-snipe and bullet-player collision detection with respawn logic
+  - Bullets are removed when hitting menu or logo areas
   - Demo pauses automatically when menu options are selected
   - Menu remains fully accessible and visible at all times
   - Performance optimized with parallel processing, caching, and squared distance calculations

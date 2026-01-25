@@ -90,6 +90,8 @@ public class IntroScreen : View
     private List<DemoPlayer> _demoPlayers = new List<DemoPlayer>(2); // Pre-allocated for 2 players
     private List<Snipe> _demoSnipes = new List<Snipe>(10); // Pre-allocated capacity
     private List<Bullet> _demoBullets = new List<Bullet>(20); // Pre-allocated capacity
+    private Dictionary<string, int> _snipeDirectionPersistence = new Dictionary<string, int>(); // Track snipe direction persistence by SnipeId
+    private Dictionary<string, (int count, DateTime lastBurstTime)> _playerBurstFire = new Dictionary<string, (int, DateTime)>(); // Track burst fire state by playerId
     private DateTime _demoUpdateTimer = DateTime.Now;
     private DateTime _demoSpawnTimer = DateTime.Now;
     private (int x, int y, int width, int height)? _cachedMenuBounds = null;
@@ -98,14 +100,21 @@ public class IntroScreen : View
     private Random _demoRandom = new Random();
     
     // Demo constants
-    private const int MaxDemoSnipes = 10;
+    private const int MaxDemoSnipes = 25;
     private const int MaxDemoBulletsPerPlayer = 10;
     private const int DemoUpdateIntervalMs = 150;
+    private const double DemoSnipeBulletSpeed = 8.0; // Reduced from 15.0 for slower, more visible bullets
+    private const int BurstFireChancePercent = 15; // 15% chance to fire a burst
+    private const int BurstFireCount = 3; // Number of bullets in a burst
+    private const int BurstFireIntervalMs = 100; // Time between bullets in a burst
     private const int SnipeSpawnIntervalMs = 2000;
     private const double PlayerAvoidanceRadius = 5.0;
     private const double PlayerSnipeHomingRadius = 8.0;
     private const double CollisionRadiusSquared = 1.0; // 1.0 squared for collision detection
     private const double BulletSnipeCollisionRadiusSquared = 0.5; // Smaller radius for bullet-snipe collisions
+    private const int SnipeMinDirectionPersistence = 5; // Minimum moves before changing direction
+    private const int SnipeMaxDirectionPersistence = 12; // Maximum moves before changing direction
+    private const int PlayerPauseChancePercent = 15; // 15% chance player pauses instead of moving
     
     // Dependencies
     private GameConfig _config;
@@ -222,6 +231,8 @@ public class IntroScreen : View
         _demoPlayers.Clear();
         _demoSnipes.Clear();
         _demoBullets.Clear();
+        _snipeDirectionPersistence.Clear();
+        _playerBurstFire.Clear();
         
         // Invalidate cached bounds
         _cachedMenuBounds = null;
@@ -532,7 +543,7 @@ public class IntroScreen : View
                     break;
                 case 'E':
                 case 'X':
-                    _selectedMenuIndex = 3;
+                    _selectedMenuIndex = 4; // Exit is at index 4
                     HandleMenuSelection();
                     break;
             }
@@ -1028,8 +1039,8 @@ public class IntroScreen : View
             {
                 if (!firstLetterDrawn && char.IsLetter(c))
                 {
-                    // First letter - draw in yellow
-                    SetAttribute(new DrawingAttribute(Color.Yellow, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                    // First letter - draw in cyan
+                    SetAttribute(new DrawingAttribute(Color.Cyan, i == _selectedMenuIndex ? Color.White : Color.Blue));
                     this.AddChar(c);
                     firstLetterDrawn = true;
                     // Reset to menu color
@@ -2060,28 +2071,58 @@ public class IntroScreen : View
     }
     
     private List<(int dx, int dy)> GetValidDirections(double x, double y, int width, int height,
-        in (int x, int y, int w, int h) menuBounds, in (int x, int y, int w, int h) logoBounds)
+        in (int x, int y, int w, int h) menuBounds, in (int x, int y, int w, int h) logoBounds, bool isPlayer = false)
     {
         var directions = new List<(int dx, int dy)>(8);
         var allDirections = new[] { (-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1) };
+        
+        // Sprite dimensions: players are 2x3, snipes are 2x1 (arrow + '@' or '@' + arrow, side by side)
+        int spriteWidth = isPlayer ? 2 : 2;
+        int spriteHeight = isPlayer ? 3 : 1;
         
         foreach (var (dx, dy) in allDirections)
         {
             double newX = x + dx;
             double newY = y + dy;
             
-            // Check boundaries
-            if (newX < 0 || newX >= width || newY < 0 || newY >= height)
+            // Check boundaries - account for sprite size
+            if (newX < 0 || newX + spriteWidth - 1 >= width || newY < 0 || newY + spriteHeight - 1 >= height)
                 continue;
             
-            // Check menu overlap
-            if (newX >= menuBounds.x && newX < menuBounds.x + menuBounds.w &&
-                newY >= menuBounds.y && newY < menuBounds.y + menuBounds.h)
+            // Check menu overlap - check all sprite positions
+            bool overlapsMenu = false;
+            for (int sx = 0; sx < spriteWidth && !overlapsMenu; sx++)
+            {
+                for (int sy = 0; sy < spriteHeight && !overlapsMenu; sy++)
+                {
+                    double checkX = newX + sx;
+                    double checkY = newY + sy;
+                    if (checkX >= menuBounds.x && checkX < menuBounds.x + menuBounds.w &&
+                        checkY >= menuBounds.y && checkY < menuBounds.y + menuBounds.h)
+                    {
+                        overlapsMenu = true;
+                    }
+                }
+            }
+            if (overlapsMenu)
                 continue;
             
-            // Check logo overlap
-            if (newX >= logoBounds.x && newX < logoBounds.x + logoBounds.w &&
-                newY >= logoBounds.y && newY < logoBounds.y + logoBounds.h)
+            // Check logo overlap - check all sprite positions
+            bool overlapsLogo = false;
+            for (int sx = 0; sx < spriteWidth && !overlapsLogo; sx++)
+            {
+                for (int sy = 0; sy < spriteHeight && !overlapsLogo; sy++)
+                {
+                    double checkX = newX + sx;
+                    double checkY = newY + sy;
+                    if (checkX >= logoBounds.x && checkX < logoBounds.x + logoBounds.w &&
+                        checkY >= logoBounds.y && checkY < logoBounds.y + logoBounds.h)
+                    {
+                        overlapsLogo = true;
+                    }
+                }
+            }
+            if (overlapsLogo)
                 continue;
             
             directions.Add((dx, dy));
@@ -2143,8 +2184,12 @@ public class IntroScreen : View
             {
                 _demoPlayers[i].PreviousX = _demoPlayers[i].X;
                 _demoPlayers[i].PreviousY = _demoPlayers[i].Y;
-                _demoPlayers[i].X = Math.Max(0, Math.Min(width - 1, _demoPlayers[i].X + movement.dx));
-                _demoPlayers[i].Y = Math.Max(0, Math.Min(height - 1, _demoPlayers[i].Y + movement.dy));
+                
+                // Update position with boundary clamping (players are 2x3, so account for sprite size)
+                double newX = _demoPlayers[i].X + movement.dx;
+                double newY = _demoPlayers[i].Y + movement.dy;
+                _demoPlayers[i].X = Math.Max(0, Math.Min(width - 2, newX)); // width - 2 because sprite is 2 wide
+                _demoPlayers[i].Y = Math.Max(0, Math.Min(height - 3, newY)); // height - 3 because sprite is 3 tall
                 
                 // Only update direction if it changed (persistence counter handles this)
                 if (movement.dx != _demoPlayers[i].DirectionX || movement.dy != _demoPlayers[i].DirectionY)
@@ -2164,8 +2209,12 @@ public class IntroScreen : View
             {
                 _demoSnipes[i].PreviousX = _demoSnipes[i].X;
                 _demoSnipes[i].PreviousY = _demoSnipes[i].Y;
-                _demoSnipes[i].X = Math.Max(0, Math.Min(width - 1, _demoSnipes[i].X + movement.dx));
-                _demoSnipes[i].Y = Math.Max(0, Math.Min(height - 1, _demoSnipes[i].Y + movement.dy));
+                
+                // Update position with boundary clamping (snipes are 2x1, so account for sprite size)
+                double newX = _demoSnipes[i].X + movement.dx;
+                double newY = _demoSnipes[i].Y + movement.dy;
+                _demoSnipes[i].X = (int)Math.Max(0, Math.Min(width - 2, newX)); // width - 2 because sprite is 2 wide (arrow + '@')
+                _demoSnipes[i].Y = (int)Math.Max(0, Math.Min(height - 1, newY)); // height - 1 because sprite is 1 tall
                 _demoSnipes[i].DirectionX = movement.dx;
                 _demoSnipes[i].DirectionY = movement.dy;
                 _demoSnipes[i].LastMoveTime = _cachedFrameTime;
@@ -2176,15 +2225,69 @@ public class IntroScreen : View
         for (int i = _demoBullets.Count - 1; i >= 0; i--)
         {
             var bullet = _demoBullets[i];
-            bullet.PreviousX = bullet.X;
-            bullet.PreviousY = bullet.Y;
-            bullet.Update();
             
-            // Remove bullets that are off-screen or expired
-            if (bullet.X < 0 || bullet.X >= width || bullet.Y < 0 || bullet.Y >= height ||
-                (_cachedFrameTime - bullet.CreatedAt).TotalSeconds > Bullet.LifetimeSeconds)
+            // Check if bullet expired
+            if ((_cachedFrameTime - bullet.CreatedAt).TotalSeconds > Bullet.LifetimeSeconds)
             {
                 _demoBullets.RemoveAt(i);
+                continue;
+            }
+            
+            // Check if bullet hit menu or logo
+            bool hitMenu = bullet.X >= menuBounds.x && bullet.X < menuBounds.x + menuBounds.width &&
+                          bullet.Y >= menuBounds.y && bullet.Y < menuBounds.y + menuBounds.height;
+            bool hitLogo = bullet.X >= logoBounds.x && bullet.X < logoBounds.x + logoBounds.width &&
+                          bullet.Y >= logoBounds.y && bullet.Y < logoBounds.y + logoBounds.height;
+            
+            if (hitMenu || hitLogo)
+            {
+                _demoBullets.RemoveAt(i);
+                continue;
+            }
+            
+            // Store previous position before updating
+            double prevX = bullet.X;
+            double prevY = bullet.Y;
+            bullet.PreviousX = prevX;
+            bullet.PreviousY = prevY;
+            bullet.Update();
+            
+            // Handle screen edge bouncing (matching game's wall bouncing behavior)
+            bool bounced = false;
+            
+            // Check left/right edges
+            if (bullet.X < 0)
+            {
+                bullet.BounceX();
+                bullet.X = 0;
+                bounced = true;
+            }
+            else if (bullet.X >= width)
+            {
+                bullet.BounceX();
+                bullet.X = width - 1;
+                bounced = true;
+            }
+            
+            // Check top/bottom edges
+            if (bullet.Y < 0)
+            {
+                bullet.BounceY();
+                bullet.Y = 0;
+                bounced = true;
+            }
+            else if (bullet.Y >= height)
+            {
+                bullet.BounceY();
+                bullet.Y = height - 1;
+                bounced = true;
+            }
+            
+            // If bullet bounced, move it back to previous position to avoid getting stuck
+            if (bounced)
+            {
+                bullet.X = prevX;
+                bullet.Y = prevY;
             }
         }
         
@@ -2211,8 +2314,12 @@ public class IntroScreen : View
         if ((_cachedFrameTime - player.LastMoveTime).TotalMilliseconds < DemoPlayer.MoveIntervalMs)
             return (0, 0);
         
-        // Get valid directions
-        var validDirections = GetValidDirections(player.X, player.Y, width, height, menuBounds, logoBounds);
+        // Occasionally pause (don't move)
+        if (_demoRandom.Next(100) < PlayerPauseChancePercent)
+            return (0, 0);
+        
+        // Get valid directions (players are 2x3 sprites)
+        var validDirections = GetValidDirections(player.X, player.Y, width, height, menuBounds, logoBounds, isPlayer: true);
         if (validDirections.Count == 0)
             return (0, 0);
         
@@ -2306,37 +2413,77 @@ public class IntroScreen : View
         if ((_cachedFrameTime - snipe.LastMoveTime).TotalMilliseconds < DemoSnipeMoveIntervalMs)
             return (0, 0);
         
-        // Find nearest player
-        double minDistSquared = double.MaxValue;
-        DemoPlayer? nearestPlayer = null;
-        foreach (var player in allPlayers)
+        // Get or initialize direction persistence count for this snipe
+        if (!_snipeDirectionPersistence.TryGetValue(snipe.SnipeId, out int persistenceCount))
         {
-            if (!player.IsAlive) continue;
-            double distSq = CalculateSquaredDistance(snipe.X, snipe.Y, player.X, player.Y);
-            if (distSq < minDistSquared)
+            persistenceCount = 0;
+            _snipeDirectionPersistence[snipe.SnipeId] = 0;
+        }
+        
+        // Get valid directions
+        var validDirections = GetValidDirections(snipe.X, snipe.Y, width, height, menuBounds, logoBounds, isPlayer: false);
+        if (validDirections.Count == 0)
+            return (0, 0);
+        
+        // Check if snipe is at or near screen edge - if so, turn around
+        bool nearLeftEdge = snipe.X <= 1;
+        bool nearRightEdge = snipe.X >= width - 3; // width - 3 because snipe is 2 wide (arrow + '@')
+        bool nearTopEdge = snipe.Y <= 1;
+        bool nearBottomEdge = snipe.Y >= height - 2; // height - 2 because snipe is 1 tall
+        
+        if (nearLeftEdge || nearRightEdge || nearTopEdge || nearBottomEdge)
+        {
+            // Turn around - reverse direction
+            int reverseX = -snipe.DirectionX;
+            int reverseY = -snipe.DirectionY;
+            
+            if (validDirections.Contains((reverseX, reverseY)))
             {
-                minDistSquared = distSq;
-                nearestPlayer = player;
+                _snipeDirectionPersistence[snipe.SnipeId] = 0; // Reset persistence when turning around
+                return (reverseX, reverseY);
+            }
+            
+            // If reverse direction not valid, pick a direction away from the edge
+            var awayFromEdgeDirs = new List<(int dx, int dy)>();
+            if (nearLeftEdge) awayFromEdgeDirs.Add((1, 0));
+            if (nearRightEdge) awayFromEdgeDirs.Add((-1, 0));
+            if (nearTopEdge) awayFromEdgeDirs.Add((0, 1));
+            if (nearBottomEdge) awayFromEdgeDirs.Add((0, -1));
+            
+            foreach (var dir in awayFromEdgeDirs)
+            {
+                if (validDirections.Contains(dir))
+                {
+                    _snipeDirectionPersistence[snipe.SnipeId] = 0; // Reset persistence when turning around
+                    return dir;
+                }
             }
         }
         
-        // Move away from nearest player
-        if (nearestPlayer != null)
+        // Direction persistence: continue in same direction if still valid and haven't reached max persistence
+        bool shouldChangeDirection = persistenceCount >= SnipeMaxDirectionPersistence ||
+                                     (persistenceCount >= SnipeMinDirectionPersistence &&
+                                      _demoRandom.Next(100) < 15); // 15% chance to change after min persistence
+        
+        if (!shouldChangeDirection && snipe.DirectionX != 0 || snipe.DirectionY != 0)
         {
-            double dx = snipe.X - nearestPlayer.X;
-            double dy = snipe.Y - nearestPlayer.Y;
-            int dirX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
-            int dirY = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
-            
-            var validDirections = GetValidDirections(snipe.X, snipe.Y, width, height, menuBounds, logoBounds);
-            if (validDirections.Contains((dirX, dirY)))
-                return (dirX, dirY);
+            // Try to continue in current direction
+            var currentDir = (snipe.DirectionX, snipe.DirectionY);
+            if (validDirections.Contains(currentDir))
+            {
+                _snipeDirectionPersistence[snipe.SnipeId] = persistenceCount + 1;
+                return currentDir;
+            }
         }
         
-        // Random movement if can't move away
-        var validDirs = GetValidDirections(snipe.X, snipe.Y, width, height, menuBounds, logoBounds);
+        // Random movement - reset persistence counter
+        var validDirs = GetValidDirections(snipe.X, snipe.Y, width, height, menuBounds, logoBounds, isPlayer: false);
         if (validDirs.Count > 0)
-            return validDirs[_demoRandom.Next(validDirs.Count)];
+        {
+            var newDir = validDirs[_demoRandom.Next(validDirs.Count)];
+            _snipeDirectionPersistence[snipe.SnipeId] = 0;
+            return newDir;
+        }
         
         return (0, 0);
     }
@@ -2351,8 +2498,39 @@ public class IntroScreen : View
         {
             if (!player.IsAlive) continue;
             
-            // Check if it's time to shoot
-            if ((_cachedFrameTime - player.LastShootTime).TotalMilliseconds < DemoPlayer.ShootIntervalMs)
+            // Check if player is in burst fire mode
+            bool inBurstMode = false;
+            int burstCountRemaining = 0;
+            if (_playerBurstFire.TryGetValue(player.PlayerId, out var burstState))
+            {
+                // Check if enough time has passed for next bullet in burst
+                if ((_cachedFrameTime - burstState.lastBurstTime).TotalMilliseconds >= BurstFireIntervalMs)
+                {
+                    inBurstMode = true;
+                    burstCountRemaining = burstState.count - 1;
+                    if (burstCountRemaining <= 0)
+                    {
+                        // Burst complete, remove from dictionary
+                        _playerBurstFire.Remove(player.PlayerId);
+                        inBurstMode = false;
+                    }
+                }
+            }
+            
+            // Check if it's time to shoot (normal shot or burst shot)
+            bool canShoot = false;
+            if (inBurstMode)
+            {
+                // In burst mode - can shoot if interval has passed
+                canShoot = true;
+            }
+            else
+            {
+                // Normal shot - check regular interval
+                canShoot = (_cachedFrameTime - player.LastShootTime).TotalMilliseconds >= DemoPlayer.ShootIntervalMs;
+            }
+            
+            if (!canShoot)
                 continue;
             
             // Count bullets for this player
@@ -2383,17 +2561,29 @@ public class IntroScreen : View
                 
                 if (dist > 0)
                 {
-                    // Normalize and set velocity
-                    // Game: BulletSpeed = 1.0 per 10ms update = 100 cells/second
-                    // Demo: Updates every 150ms, so to match game speed: 1.0 * (150/10) = 15.0 per update
-                    const double DemoSnipeBulletSpeed = 15.0;
+                    // Normalize and set velocity (reduced speed for demo)
                     double velX = (dx / dist) * DemoSnipeBulletSpeed;
                     double velY = (dy / dist) * DemoSnipeBulletSpeed;
                     
                     _demoBullets.Add(new Bullet(player.X, player.Y, velX, velY, null, player.PlayerId));
-                    // Allow multiple shots in same direction - don't reset LastShootTime immediately
-                    // Only update if enough time has passed (handled by the interval check above)
-                    player.LastShootTime = _cachedFrameTime;
+                    
+                    if (inBurstMode)
+                    {
+                        // Update burst state
+                        _playerBurstFire[player.PlayerId] = (burstCountRemaining, _cachedFrameTime);
+                    }
+                    else
+                    {
+                        // Normal shot - check if we should start a burst
+                        if (_demoRandom.Next(100) < BurstFireChancePercent)
+                        {
+                            // Start burst fire
+                            _playerBurstFire[player.PlayerId] = (BurstFireCount - 1, _cachedFrameTime); // -1 because we just fired one
+                        }
+                        
+                        // Update last shoot time for normal shots
+                        player.LastShootTime = _cachedFrameTime;
+                    }
                 }
             }
         }
@@ -2521,6 +2711,8 @@ public class IntroScreen : View
         snipe.PreviousY = (int)y;
         snipe.IsAlive = true;
         snipe.LastMoveTime = _cachedFrameTime;
+        // Reset direction persistence on respawn
+        _snipeDirectionPersistence[snipe.SnipeId] = 0;
     }
     
     private void DrawDemoPlayers(int width, int height)
@@ -2598,42 +2790,68 @@ public class IntroScreen : View
         {
             if (!snipe.IsAlive) continue;
             
-            // Clear previous position
+            // Clear previous position (snipe is 2 wide: arrow + '@' or '@' + arrow)
             if (snipe.PreviousX >= 0 && snipe.PreviousX < width &&
                 snipe.PreviousY >= 0 && snipe.PreviousY < height)
             {
                 SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+                // Clear both positions (arrow and '@')
                 Move(snipe.PreviousX, snipe.PreviousY);
                 this.AddChar(' ');
                 
-                // Clear arrow if it was drawn
-                if (snipe.PreviousDirectionX != 0 || snipe.PreviousDirectionY != 0)
+                // Clear arrow position (to the side, not below)
+                int arrowX = snipe.PreviousDirectionX < 0 ? snipe.PreviousX : snipe.PreviousX + 1;
+                int charX = snipe.PreviousDirectionX < 0 ? snipe.PreviousX + 1 : snipe.PreviousX;
+                
+                if (arrowX >= 0 && arrowX < width && snipe.PreviousY >= 0 && snipe.PreviousY < height)
                 {
-                    int arrowY = snipe.PreviousY + 1;
-                    if (arrowY >= 0 && arrowY < height)
-                    {
-                        Move(snipe.PreviousX, arrowY);
-                        this.AddChar(' ');
-                    }
+                    Move(arrowX, snipe.PreviousY);
+                    this.AddChar(' ');
+                }
+                if (charX >= 0 && charX < width && snipe.PreviousY >= 0 && snipe.PreviousY < height && charX != arrowX)
+                {
+                    Move(charX, snipe.PreviousY);
+                    this.AddChar(' ');
                 }
             }
             
-            // Draw snipe
+            // Draw snipe (matching game format: arrow to the side, not underneath)
             if (snipe.X >= 0 && snipe.X < width && snipe.Y >= 0 && snipe.Y < height)
             {
                 // Set color based on snipe type: TypeA = magenta, TypeB = green (matching game)
                 var snipeColor = snipe.Type == SnipeType.TypeA ? Color.Magenta : Color.Green;
                 SetAttribute(new DrawingAttribute(snipeColor, Color.Blue));
-                Move(snipe.X, snipe.Y);
-                this.AddChar(snipe.GetDisplayChar());
                 
-                // Draw direction arrow
-                if (snipe.DirectionX != 0 || snipe.DirectionY != 0)
+                // Draw order depends on direction (matching game):
+                // Moving left: arrow first, then '@'
+                // Moving right or other: '@' first, then arrow
+                if (snipe.DirectionX < 0)
                 {
-                    int arrowY = snipe.Y + 1;
-                    if (arrowY >= 0 && arrowY < height)
+                    // Moving left - draw arrow first, then character
+                    if (snipe.X >= 0 && snipe.X < width && snipe.Y >= 0 && snipe.Y < height)
                     {
-                        Move(snipe.X, arrowY);
+                        Move(snipe.X, snipe.Y);
+                        this.AddChar(snipe.GetDirectionArrow());
+                    }
+                    
+                    if (snipe.X + 1 >= 0 && snipe.X + 1 < width && snipe.Y >= 0 && snipe.Y < height)
+                    {
+                        Move(snipe.X + 1, snipe.Y);
+                        this.AddChar(snipe.GetDisplayChar());
+                    }
+                }
+                else
+                {
+                    // Moving right or other directions - draw character first, then arrow
+                    if (snipe.X >= 0 && snipe.X < width && snipe.Y >= 0 && snipe.Y < height)
+                    {
+                        Move(snipe.X, snipe.Y);
+                        this.AddChar(snipe.GetDisplayChar());
+                    }
+                    
+                    if (snipe.X + 1 >= 0 && snipe.X + 1 < width && snipe.Y >= 0 && snipe.Y < height)
+                    {
+                        Move(snipe.X + 1, snipe.Y);
                         this.AddChar(snipe.GetDirectionArrow());
                     }
                 }
@@ -2687,7 +2905,7 @@ internal class DemoPlayer(string initials, Terminal.Gui.Drawing.Color color, str
     public string PlayerId { get; } = playerId;
     public int DirectionPersistenceCount { get; set; } = 0; // How many moves in current direction
     public const int MoveIntervalMs = 100; // Move more frequently
-    public const int ShootIntervalMs = 800; // Allow more frequent shooting (players can shoot 1-3 times in same direction)
+    public const int ShootIntervalMs = 1200; // Reduced shooting frequency for demo
     public const int MinDirectionPersistence = 3; // Minimum moves before changing direction
     public const int MaxDirectionPersistence = 8; // Maximum moves before changing direction
 }
