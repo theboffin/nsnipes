@@ -6,6 +6,7 @@ using Terminal.Gui.Drawing;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using NSnipes.GrpcServer;
 using DrawingAttribute = Terminal.Gui.Drawing.Attribute;
 using GameMessage = NSnipes.GrpcServer.GameMessage;
@@ -1776,6 +1777,14 @@ public class Game : Window
     /// </summary>
     private List<(int dx, int dy)> GetValidDirections(Snipe snipe)
     {
+        return GetValidDirectionsFromSnapshot(snipe.X, snipe.Y);
+    }
+
+    /// <summary>
+    /// Thread-safe version that uses position snapshot instead of snipe object
+    /// </summary>
+    private List<(int dx, int dy)> GetValidDirectionsFromSnapshot(int snipeX, int snipeY)
+    {
         List<(int dx, int dy)> possibleDirections = new List<(int, int)>(8); // Max 8 directions
 
         // Try all 8 possible directions (including diagonals)
@@ -1786,8 +1795,8 @@ public class Game : Window
                 if (dx == 0 && dy == 0)
                     continue; // Skip no movement
 
-                int testX = snipe.X + dx;
-                int testY = snipe.Y + dy;
+                int testX = snipeX + dx;
+                int testY = snipeY + dy;
 
                 if (IsSnipePositionValid(testX, testY, dx, dy))
                 {
@@ -1841,7 +1850,16 @@ public class Game : Window
     private (int dx, int dy) CalculateSnipeDirection(Snipe snipe, List<(int dx, int dy)> possibleDirections, 
                                                        (int preferredDirX, int preferredDirY) preferredDir, double heatFactor)
     {
-        bool currentDirectionValid = possibleDirections.Contains((snipe.DirectionX, snipe.DirectionY));
+        return CalculateSnipeDirectionFromSnapshot(snipe.DirectionX, snipe.DirectionY, possibleDirections, preferredDir, heatFactor);
+    }
+
+    /// <summary>
+    /// Thread-safe version that uses direction snapshot instead of snipe object
+    /// </summary>
+    private (int dx, int dy) CalculateSnipeDirectionFromSnapshot(int currentDirX, int currentDirY, List<(int dx, int dy)> possibleDirections, 
+                                                       (int preferredDirX, int preferredDirY) preferredDir, double heatFactor)
+    {
+        bool currentDirectionValid = possibleDirections.Contains((currentDirX, currentDirY));
 
         if (currentDirectionValid && heatFactor < 0.3)
         {
@@ -1855,7 +1873,7 @@ public class Game : Window
             else
             {
                 // Continue in current direction
-                return (snipe.DirectionX, snipe.DirectionY);
+                return (currentDirX, currentDirY);
             }
         }
         else if (heatFactor > 0.3 && (preferredDir.preferredDirX != 0 || preferredDir.preferredDirY != 0))
@@ -1866,10 +1884,10 @@ public class Game : Window
             if (preferredValid)
             {
                 // Prefer moving toward player, but allow continuing current direction if it's also toward player
-                if (currentDirectionValid && snipe.DirectionX == preferredDir.preferredDirX && snipe.DirectionY == preferredDir.preferredDirY)
+                if (currentDirectionValid && currentDirX == preferredDir.preferredDirX && currentDirY == preferredDir.preferredDirY)
                 {
                     // Current direction is toward player - continue
-                    return (snipe.DirectionX, snipe.DirectionY);
+                    return (currentDirX, currentDirY);
                 }
                 else
                 {
@@ -1880,7 +1898,7 @@ public class Game : Window
             else if (currentDirectionValid)
             {
                 // Preferred direction not valid, but current direction is - continue
-                return (snipe.DirectionX, snipe.DirectionY);
+                return (currentDirX, currentDirY);
             }
             else
             {
@@ -1897,6 +1915,7 @@ public class Game : Window
 
     private void UpdateSnipes()
     {
+        // Phase 1: Remove dead snipes (sequential - modifies collection)
         for (int i = _snipes.Count - 1; i >= 0; i--)
         {
             var snipe = _snipes[i];
@@ -1913,62 +1932,232 @@ public class Game : Window
                 {
                     CheckLevelComplete();
                 }
-                
-                continue;
             }
+        }
+
+        // Phase 2: Collect snipes that need to move (read-only filtering)
+        // Store indices only - we'll access snipes by index when needed
+        var snipesToUpdate = new List<int>(_snipes.Count);
+        for (int i = 0; i < _snipes.Count; i++)
+        {
+            var snipe = _snipes[i];
+            if (!snipe.IsAlive)
+                continue;
 
             // Check if it's time to move
             int timeSinceLastMove = (int)(_currentFrameTime - snipe.LastMoveTime).TotalMilliseconds;
-            if (timeSinceLastMove < Snipe.MoveIntervalMs)
-                continue;
+            if (timeSinceLastMove >= Snipe.MoveIntervalMs)
+            {
+                snipesToUpdate.Add(i);
+            }
+        }
 
-            // Calculate distance to player for heat radius system
-            int deltaX = _player.X - snipe.X;
-            int deltaY = _player.Y - snipe.Y;
+        if (snipesToUpdate.Count == 0)
+            return;
 
-            // Handle map wrapping - find shortest path
-            _map.WrapDeltaX(ref deltaX);
-            _map.WrapDeltaY(ref deltaY);
+        // Phase 3: Parallelize AI calculations (read-only operations)
+        // Cache player position and current frame time for thread safety
+        int playerX = _player.X;
+        int playerY = _player.Y;
+        DateTime frameTime = _currentFrameTime;
+        const int maxHeatRadius = 20;
+
+        // Capture snipe state snapshots before parallel execution to ensure thread safety
+        var snipeSnapshots = new (int x, int y, int dirX, int dirY)[snipesToUpdate.Count];
+        var snipeIndices = new int[snipesToUpdate.Count];
+        for (int i = 0; i < snipesToUpdate.Count; i++)
+        {
+            int index = snipesToUpdate[i];
+            var snipe = _snipes[index];
+            snipeSnapshots[i] = (snipe.X, snipe.Y, snipe.DirectionX, snipe.DirectionY);
+            snipeIndices[i] = index;
+        }
+
+        var movementDecisions = new (int index, int newX, int newY, int dirX, int dirY, bool canMove)[snipesToUpdate.Count];
+        
+        // Cache map dimensions for thread safety (read-only properties)
+        int mapWidth = _map.MapWidth;
+        int mapHeight = _map.MapHeight;
+        
+        // Only parallelize if there are enough snipes to benefit (threshold: 5+ snipes)
+        // For small numbers, overhead of parallelization may not be worth it
+        if (snipesToUpdate.Count < 5)
+        {
+            // Sequential processing for small numbers
+            for (int i = 0; i < snipesToUpdate.Count; i++)
+            {
+                int index = snipeIndices[i];
+                var snapshot = snipeSnapshots[i];
+
+                // Calculate distance to player for heat radius system (using snapshot)
+                int deltaX = playerX - snapshot.x;
+                int deltaY = playerY - snapshot.y;
+
+                // Handle map wrapping - find shortest path (read-only map operations)
+                int wrappedDeltaX = deltaX;
+                int wrappedDeltaY = deltaY;
+                if (wrappedDeltaX > mapWidth / 2)
+                    wrappedDeltaX -= mapWidth;
+                else if (wrappedDeltaX < -mapWidth / 2)
+                    wrappedDeltaX += mapWidth;
+
+                if (wrappedDeltaY > mapHeight / 2)
+                    wrappedDeltaY -= mapHeight;
+                else if (wrappedDeltaY < -mapHeight / 2)
+                    wrappedDeltaY += mapHeight;
+
+                // Calculate distance (Manhattan distance for simplicity)
+                int distanceToPlayer = Math.Abs(wrappedDeltaX) + Math.Abs(wrappedDeltaY);
+
+                // Heat radius: closer = more attracted, further = less attracted
+                double heatFactor = Math.Max(0, 1.0 - (distanceToPlayer / (double)maxHeatRadius));
+
+                // Determine preferred direction (toward player) - using snapshot, not snipe object
+                var preferredDir = CalculatePreferredDirectionParallel(snapshot.x, snapshot.y, playerX, playerY, wrappedDeltaX, wrappedDeltaY);
+
+                // Get all possible valid directions (using snapshot for position)
+                var possibleDirections = GetValidDirectionsFromSnapshot(snapshot.x, snapshot.y);
+
+                if (possibleDirections.Count == 0)
+                {
+                    // Can't move in any direction - stay in place but keep trying
+                    movementDecisions[i] = (index, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
+                    continue;
+                }
+
+                // Determine direction choice based on rules (using snapshot for current direction)
+                var chosenDirection = CalculateSnipeDirectionFromSnapshot(snapshot.dirX, snapshot.dirY, possibleDirections, preferredDir, heatFactor);
+
+                // Calculate new position (don't apply yet - that happens sequentially)
+                int newSnipeX = snapshot.x + chosenDirection.dx;
+                int newSnipeY = snapshot.y + chosenDirection.dy;
+                movementDecisions[i] = (index, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
+            }
+        }
+        else
+        {
+            // Parallel processing for larger numbers
+            try
+            {
+                Parallel.For(0, snipesToUpdate.Count, i =>
+                {
+                    int index = snipeIndices[i];
+                    var snapshot = snipeSnapshots[i];
+
+            // Calculate distance to player for heat radius system (using snapshot)
+            int deltaX = playerX - snapshot.x;
+            int deltaY = playerY - snapshot.y;
+
+            // Handle map wrapping - find shortest path (read-only map operations)
+            int wrappedDeltaX = deltaX;
+            int wrappedDeltaY = deltaY;
+            if (wrappedDeltaX > mapWidth / 2)
+                wrappedDeltaX -= mapWidth;
+            else if (wrappedDeltaX < -mapWidth / 2)
+                wrappedDeltaX += mapWidth;
+
+            if (wrappedDeltaY > mapHeight / 2)
+                wrappedDeltaY -= mapHeight;
+            else if (wrappedDeltaY < -mapHeight / 2)
+                wrappedDeltaY += mapHeight;
 
             // Calculate distance (Manhattan distance for simplicity)
-            int distanceToPlayer = Math.Abs(deltaX) + Math.Abs(deltaY);
+            int distanceToPlayer = Math.Abs(wrappedDeltaX) + Math.Abs(wrappedDeltaY);
 
             // Heat radius: closer = more attracted, further = less attracted
-            // Use a maximum radius (e.g., 20 cells) - beyond this, movement is mostly random
-            const int maxHeatRadius = 20;
             double heatFactor = Math.Max(0, 1.0 - (distanceToPlayer / (double)maxHeatRadius));
-            // heatFactor: 1.0 when at player, 0.0 when at maxHeatRadius or beyond
 
-            // Determine preferred direction (toward player)
-            var preferredDir = CalculatePreferredDirection(snipe);
+            // Determine preferred direction (toward player) - using snapshot, not snipe object
+            var preferredDir = CalculatePreferredDirectionParallel(snapshot.x, snapshot.y, playerX, playerY, wrappedDeltaX, wrappedDeltaY);
 
-            // Get all possible valid directions
-            var possibleDirections = GetValidDirections(snipe);
+            // Get all possible valid directions (using snapshot for position)
+            var possibleDirections = GetValidDirectionsFromSnapshot(snapshot.x, snapshot.y);
 
             if (possibleDirections.Count == 0)
             {
                 // Can't move in any direction - stay in place but keep trying
-                snipe.LastMoveTime = _currentFrameTime;
+                movementDecisions[i] = (index, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
+                return;
+            }
+
+            // Determine direction choice based on rules (using snapshot for current direction)
+            var chosenDirection = CalculateSnipeDirectionFromSnapshot(snapshot.dirX, snapshot.dirY, possibleDirections, preferredDir, heatFactor);
+
+                    // Calculate new position (don't apply yet - that happens sequentially)
+                    int newSnipeX = snapshot.x + chosenDirection.dx;
+                    int newSnipeY = snapshot.y + chosenDirection.dy;
+                    movementDecisions[i] = (index, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
+                });
+            }
+            catch (Exception)
+            {
+                // If parallel execution fails, fall back to sequential processing
+                // This prevents crashes but may indicate a thread safety issue
+                for (int i = 0; i < snipesToUpdate.Count; i++)
+                {
+                    int index = snipeIndices[i];
+                    var snapshot = snipeSnapshots[i];
+
+                    int deltaX = playerX - snapshot.x;
+                    int deltaY = playerY - snapshot.y;
+
+                    int wrappedDeltaX = deltaX;
+                    int wrappedDeltaY = deltaY;
+                    if (wrappedDeltaX > mapWidth / 2)
+                        wrappedDeltaX -= mapWidth;
+                    else if (wrappedDeltaX < -mapWidth / 2)
+                        wrappedDeltaX += mapWidth;
+
+                    if (wrappedDeltaY > mapHeight / 2)
+                        wrappedDeltaY -= mapHeight;
+                    else if (wrappedDeltaY < -mapHeight / 2)
+                        wrappedDeltaY += mapHeight;
+
+                    int distanceToPlayer = Math.Abs(wrappedDeltaX) + Math.Abs(wrappedDeltaY);
+                    double heatFactor = Math.Max(0, 1.0 - (distanceToPlayer / (double)maxHeatRadius));
+
+                    var preferredDir = CalculatePreferredDirectionParallel(snapshot.x, snapshot.y, playerX, playerY, wrappedDeltaX, wrappedDeltaY);
+                    var possibleDirections = GetValidDirectionsFromSnapshot(snapshot.x, snapshot.y);
+
+                    if (possibleDirections.Count == 0)
+                    {
+                        movementDecisions[i] = (index, snapshot.x, snapshot.y, snapshot.dirX, snapshot.dirY, false);
+                        continue;
+                    }
+
+                    var chosenDirection = CalculateSnipeDirectionFromSnapshot(snapshot.dirX, snapshot.dirY, possibleDirections, preferredDir, heatFactor);
+                    int newSnipeX = snapshot.x + chosenDirection.dx;
+                    int newSnipeY = snapshot.y + chosenDirection.dy;
+                    movementDecisions[i] = (index, newSnipeX, newSnipeY, chosenDirection.dx, chosenDirection.dy, true);
+                }
+            }
+        }
+
+        // Phase 4: Sequentially apply movements and handle collisions (modifies shared state)
+        for (int i = 0; i < movementDecisions.Length; i++)
+        {
+            var decision = movementDecisions[i];
+            if (!decision.canMove)
+            {
+                // Update LastMoveTime even if can't move
+                _snipes[decision.index].LastMoveTime = frameTime;
                 continue;
             }
 
-            // Determine direction choice based on rules
-            var chosenDirection = CalculateSnipeDirection(snipe, possibleDirections, preferredDir, heatFactor);
+            var snipe = _snipes[decision.index];
 
-            // Move snipe
-            int newSnipeX = snipe.X + chosenDirection.dx;
-            int newSnipeY = snipe.Y + chosenDirection.dy;
-            snipe.X = _map.WrapX(newSnipeX);
-            snipe.Y = _map.WrapY(newSnipeY);
-            snipe.DirectionX = chosenDirection.dx;
-            snipe.DirectionY = chosenDirection.dy;
-            snipe.LastMoveTime = _currentFrameTime;
+            // Apply movement
+            snipe.X = _map.WrapX(decision.newX);
+            snipe.Y = _map.WrapY(decision.newY);
+            snipe.DirectionX = decision.dirX;
+            snipe.DirectionY = decision.dirY;
+            snipe.LastMoveTime = frameTime;
 
             // Check for collision with other snipes
-            HandleSnipeSnipeCollisions(snipe, i);
+            HandleSnipeSnipeCollisions(snipe, decision.index);
 
             // Check collision with bullets (snipe moving into bullet)
-            HandleSnipeBulletCollision(snipe, i);
+            HandleSnipeBulletCollision(snipe, decision.index);
 
             // Check collision with player (only if snipe is still alive and game is not over)
             if (snipe.IsAlive && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
@@ -1976,6 +2165,32 @@ public class Game : Window
                 HandleSnipePlayerCollision(snipe);
             }
         }
+    }
+
+    /// <summary>
+    /// Thread-safe version of CalculatePreferredDirection that uses pre-calculated deltas and position snapshots
+    /// </summary>
+    private (int preferredDirX, int preferredDirY) CalculatePreferredDirectionParallel(int snipeX, int snipeY, int playerX, int playerY, int deltaX, int deltaY)
+    {
+        int preferredDirX = 0;
+        int preferredDirY = 0;
+
+        if (Math.Abs(deltaX) > Math.Abs(deltaY))
+        {
+            // Move horizontally first
+            preferredDirX = deltaX > 0 ? 1 : (deltaX < 0 ? -1 : 0);
+            if (preferredDirX == 0 && deltaY != 0)
+                preferredDirY = deltaY > 0 ? 1 : -1;
+        }
+        else
+        {
+            // Move vertically first
+            preferredDirY = deltaY > 0 ? 1 : (deltaY < 0 ? -1 : 0);
+            if (preferredDirY == 0 && deltaX != 0)
+                preferredDirX = deltaX > 0 ? 1 : -1;
+        }
+
+        return (preferredDirX, preferredDirY);
     }
 
     /// <summary>
