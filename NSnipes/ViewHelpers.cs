@@ -11,10 +11,11 @@ public static class ViewHelpers
 {
     /// <summary>
     /// Adds a string to the view at the current cursor position by converting each character to a Rune
+    /// Uses ReadOnlySpan to avoid allocations when passing string slices or spans
     /// </summary>
-    public static void AddString(this View view, string text)
+    public static void AddString(this View view, ReadOnlySpan<char> text)
     {
-        if (string.IsNullOrEmpty(text))
+        if (text.IsEmpty)
             return;
             
         foreach (char c in text)
