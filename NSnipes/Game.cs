@@ -590,8 +590,8 @@ public class Game : Window
                 int newWorldY = _player.Y + viewportDeltaY;
                 
                 // Handle map wrapping for collision check
-                newWorldX = (newWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                newWorldY = (newWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                newWorldX = _map.WrapX(newWorldX);
+                newWorldY = _map.WrapY(newWorldY);
                 
                 // Check against all other players (local and remote)
                 foreach (var networkPlayer in _networkPlayers.Values)
@@ -600,8 +600,8 @@ public class Game : Window
                         continue; // Skip self
                     
                     // Get network player world position (wrapped)
-                    int npWorldX = (networkPlayer.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    int npWorldY = (networkPlayer.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    int npWorldX = _map.WrapX(networkPlayer.X);
+                    int npWorldY = _map.WrapY(networkPlayer.Y);
                     
                     // Check if new position overlaps with this player (2x3 area)
                     // Player occupies: [X, X+1] columns, [Y, Y+1, Y+2] rows
@@ -906,12 +906,11 @@ public class Game : Window
             int bulletMapY = (int)Math.Round(bullet.Y);
 
             // Wrap coordinates to map bounds
-            bulletMapX = (bulletMapX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            bulletMapY = (bulletMapY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            bulletMapX = _map.WrapX(bulletMapX);
+            bulletMapY = _map.WrapY(bulletMapY);
 
             // Check if bullet hit a wall
-            if (bulletMapY >= 0 && bulletMapY < _map.MapHeight &&
-                bulletMapX >= 0 && bulletMapX < _map.MapWidth)
+            if (_map.IsValidCoordinate(bulletMapX, bulletMapY))
             {
                 char cell = _map.FullMap[bulletMapY][bulletMapX];
                 if (cell != ' ')
@@ -964,8 +963,8 @@ public class Game : Window
             // Check for bullet-snipe collision
             int bulletWorldX = (int)Math.Round(bullet.X);
             int bulletWorldY = (int)Math.Round(bullet.Y);
-            bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            bulletWorldX = _map.WrapX(bulletWorldX);
+            bulletWorldY = _map.WrapY(bulletWorldY);
 
             bool bulletRemoved = false;
 
@@ -976,8 +975,8 @@ public class Game : Window
                     continue;
 
                 // Check if bullet is at snipe position or arrow position
-                int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                int snipeWorldX = _map.WrapX(snipe.X);
+                int snipeWorldY = _map.WrapY(snipe.Y);
 
                 // Check bullet at snipe position
                 if (bulletWorldX == snipeWorldX && bulletWorldY == snipeWorldY)
@@ -1008,8 +1007,8 @@ public class Game : Window
                     // Also clear bullet's previous position if different
                     int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                     int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
 
                     if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                     {
@@ -1049,7 +1048,7 @@ public class Game : Window
 
                 // Check bullet at arrow position
                 int arrowWorldX = snipeWorldX + (snipe.DirectionX < 0 ? -1 : 1);
-                arrowWorldX = (arrowWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
+                arrowWorldX = _map.WrapX(arrowWorldX);
                 if (bulletWorldX == arrowWorldX && bulletWorldY == snipeWorldY)
                 {
                     // Bullet hit snipe arrow - clear both bullet and snipe
@@ -1078,8 +1077,8 @@ public class Game : Window
                     // Also clear bullet's previous position if different
                     int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                     int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
 
                     if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                     {
@@ -1123,8 +1122,8 @@ public class Game : Window
             {
                 bulletWorldX = (int)Math.Round(bullet.X);
                 bulletWorldY = (int)Math.Round(bullet.Y);
-                bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                bulletWorldX = _map.WrapX(bulletWorldX);
+                bulletWorldY = _map.WrapY(bulletWorldY);
 
                 foreach (var hive in _hives)
                 {
@@ -1133,10 +1132,10 @@ public class Game : Window
 
                     // Check if bullet is within hive bounds (2x2 area)
                     // Hive occupies: [X, X+1] columns, [Y, Y+1] rows
-                    int hiveWorldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    int hiveWorldY = (hive.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    int hiveWorldX2 = (hiveWorldX + 1) % _map.MapWidth;
-                    int hiveWorldY2 = (hiveWorldY + 1) % _map.MapHeight;
+                    int hiveWorldX = _map.WrapX(hive.X);
+                    int hiveWorldY = _map.WrapY(hive.Y);
+                    int hiveWorldX2 = _map.WrapX(hiveWorldX + 1);
+                    int hiveWorldY2 = _map.WrapY(hiveWorldY + 1);
 
                     // Check if bullet is within the 2x2 hive area
                     bool inHiveX = (bulletWorldX == hiveWorldX || bulletWorldX == hiveWorldX2);
@@ -1169,12 +1168,12 @@ public class Game : Window
                         }
 
                         // Also clear bullet's previous position if different
-                        int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                        int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                        prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                        prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
 
-                        if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                         {
                             int prevViewportX = prevBulletWorldX - mapOffsetX;
                             int prevViewportY = prevBulletWorldY - mapOffsetY;
@@ -1251,8 +1250,8 @@ public class Game : Window
         
         int bulletWorldX = (int)Math.Round(bullet.X);
         int bulletWorldY = (int)Math.Round(bullet.Y);
-        bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-        bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+        bulletWorldX = _map.WrapX(bulletWorldX);
+        bulletWorldY = _map.WrapY(bulletWorldY);
         
         // Check against all network players (including local)
         foreach (var networkPlayer in _networkPlayers.Values)
@@ -1261,8 +1260,8 @@ public class Game : Window
             if (bullet.PlayerId == networkPlayer.PlayerId)
                 continue;
             
-            int playerWorldX = (networkPlayer.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int playerWorldY = (networkPlayer.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int playerWorldX = _map.WrapX(networkPlayer.X);
+            int playerWorldY = _map.WrapY(networkPlayer.Y);
             
             // Check if bullet is within player's 2x3 area
             if (bulletWorldX >= playerWorldX && bulletWorldX <= playerWorldX + 1 &&
@@ -1290,12 +1289,12 @@ public class Game : Window
                 }
                 
                 // Also clear bullet's previous position if different
-                int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                
-                if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
+
+                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                 {
                     int prevViewportX = prevBulletWorldX - mapOffsetX;
                     int prevViewportY = prevBulletWorldY - mapOffsetY;
@@ -1489,16 +1488,8 @@ public class Game : Window
             int deltaY = hive.Y - _player.Y;
 
             // Handle wrapping: find the shortest path (accounting for wrap)
-            // If the difference is more than half the map size, wrap around
-            if (deltaX > _map.MapWidth / 2)
-                deltaX -= _map.MapWidth;
-            else if (deltaX < -_map.MapWidth / 2)
-                deltaX += _map.MapWidth;
-
-            if (deltaY > _map.MapHeight / 2)
-                deltaY -= _map.MapHeight;
-            else if (deltaY < -_map.MapHeight / 2)
-                deltaY += _map.MapHeight;
+            _map.WrapDeltaX(ref deltaX);
+            _map.WrapDeltaY(ref deltaY);
 
             // Convert to viewport coordinates (viewport center is at frameWidth/2, frameHeight/2)
             int hiveViewportX = (frameWidth / 2) + deltaX;
@@ -1670,10 +1661,10 @@ public class Game : Window
     private bool IsSnipePositionValid(int x, int y, int dirX, int dirY)
     {
         // Check if snipe position (x, y) is valid (not a wall)
-        int wrappedX = (x % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-        int wrappedY = (y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+        int wrappedX = _map.WrapX(x);
+        int wrappedY = _map.WrapY(y);
 
-        if (wrappedY < 0 || wrappedY >= _map.MapHeight || wrappedX < 0 || wrappedX >= _map.MapWidth)
+        if (!_map.IsValidCoordinate(wrappedX, wrappedY))
             return false;
 
         if (_map.FullMap[wrappedY][wrappedX] != ' ')
@@ -1686,10 +1677,10 @@ public class Game : Window
         int arrowX = dirX < 0 ? x - 1 : x + 1;
         int arrowY = y;
 
-        int wrappedArrowX = (arrowX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-        int wrappedArrowY = (arrowY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+        int wrappedArrowX = _map.WrapX(arrowX);
+        int wrappedArrowY = _map.WrapY(arrowY);
 
-        if (wrappedArrowY < 0 || wrappedArrowY >= _map.MapHeight || wrappedArrowX < 0 || wrappedArrowX >= _map.MapWidth)
+        if (!_map.IsValidCoordinate(wrappedArrowX, wrappedArrowY))
             return false;
 
         if (_map.FullMap[wrappedArrowY][wrappedArrowX] != ' ')
@@ -1701,16 +1692,16 @@ public class Game : Window
     private bool CheckSnipeSnipeCollision(Snipe snipe1, Snipe snipe2)
     {
         // Wrap coordinates for comparison
-        int x1 = (snipe1.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-        int y1 = (snipe1.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-        int x2 = (snipe2.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-        int y2 = (snipe2.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+        int x1 = _map.WrapX(snipe1.X);
+        int y1 = _map.WrapY(snipe1.Y);
+        int x2 = _map.WrapX(snipe2.X);
+        int y2 = _map.WrapY(snipe2.Y);
 
         // Arrow position depends on direction:
         // Moving left (DirectionX < 0): arrow is at (x - 1, y)
         // Moving right or other: arrow is at (x + 1, y)
-        int arrow1X = snipe1.DirectionX < 0 ? (x1 - 1 + _map.MapWidth) % _map.MapWidth : (x1 + 1) % _map.MapWidth;
-        int arrow2X = snipe2.DirectionX < 0 ? (x2 - 1 + _map.MapWidth) % _map.MapWidth : (x2 + 1) % _map.MapWidth;
+        int arrow1X = snipe1.DirectionX < 0 ? _map.WrapX(x1 - 1) : _map.WrapX(x1 + 1);
+        int arrow2X = snipe2.DirectionX < 0 ? _map.WrapX(x2 - 1) : _map.WrapX(x2 + 1);
 
         // Check if snipe1's position overlaps with snipe2's position or arrow
         if ((x1 == x2 && y1 == y2) || (x1 == arrow2X && y1 == y2))
@@ -1755,15 +1746,8 @@ public class Game : Window
             int deltaY = _player.Y - snipe.Y;
 
             // Handle map wrapping - find shortest path
-            if (deltaX > _map.MapWidth / 2)
-                deltaX -= _map.MapWidth;
-            else if (deltaX < -_map.MapWidth / 2)
-                deltaX += _map.MapWidth;
-
-            if (deltaY > _map.MapHeight / 2)
-                deltaY -= _map.MapHeight;
-            else if (deltaY < -_map.MapHeight / 2)
-                deltaY += _map.MapHeight;
+            _map.WrapDeltaX(ref deltaX);
+            _map.WrapDeltaY(ref deltaY);
 
             // Calculate distance (Manhattan distance for simplicity)
             int distanceToPlayer = Math.Abs(deltaX) + Math.Abs(deltaY);
@@ -1885,8 +1869,8 @@ public class Game : Window
             // Move snipe
             int newSnipeX = snipe.X + chosenDirection.dx;
             int newSnipeY = snipe.Y + chosenDirection.dy;
-            snipe.X = (newSnipeX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            snipe.Y = (newSnipeY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            snipe.X = _map.WrapX(newSnipeX);
+            snipe.Y = _map.WrapY(newSnipeY);
             snipe.DirectionX = chosenDirection.dx;
             snipe.DirectionY = chosenDirection.dy;
             snipe.LastMoveTime = _currentFrameTime;
@@ -1913,26 +1897,26 @@ public class Game : Window
                     otherSnipe.Y = otherSnipe.PreviousY;
 
                     // Wrap coordinates
-                    snipe.X = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    snipe.Y = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                    otherSnipe.X = (otherSnipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    otherSnipe.Y = (otherSnipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    snipe.X = _map.WrapX(snipe.X);
+                    snipe.Y = _map.WrapY(snipe.Y);
+                    otherSnipe.X = _map.WrapX(otherSnipe.X);
+                    otherSnipe.Y = _map.WrapY(otherSnipe.Y);
 
                     break; // Only handle one collision per update
                 }
             }
 
             // Check collision with bullets (snipe moving into bullet)
-            int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int snipeWorldX = _map.WrapX(snipe.X);
+            int snipeWorldY = _map.WrapY(snipe.Y);
 
             for (int k = _bullets.Count - 1; k >= 0; k--)
             {
                 var bullet = _bullets[k];
                 int bulletWorldX = (int)Math.Round(bullet.X);
                 int bulletWorldY = (int)Math.Round(bullet.Y);
-                bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                bulletWorldX = _map.WrapX(bulletWorldX);
+                bulletWorldY = _map.WrapY(bulletWorldY);
 
                 // Check if snipe is at bullet position
                 if (snipeWorldX == bulletWorldX && snipeWorldY == bulletWorldY)
@@ -1977,8 +1961,8 @@ public class Game : Window
                     // Also clear bullet's previous position if different
                     int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
                     int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                    prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                    prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
 
                     if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                     {
@@ -2092,8 +2076,8 @@ public class Game : Window
                 continue;
 
             // Get previous world coordinates (wrapped)
-            int prevWorldX = (snipe.PreviousX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int prevWorldY = (snipe.PreviousY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int prevWorldX = _map.WrapX(snipe.PreviousX);
+            int prevWorldY = _map.WrapY(snipe.PreviousY);
 
             // Determine where '@' and arrow were based on previous direction
             // Drawing logic: DirectionX < 0: arrow at center, '@' to right
@@ -2103,13 +2087,13 @@ public class Game : Window
             {
                 // Moving left: arrow was at snipe position, '@' was one cell to the right
                 prevArrowWorldX = prevWorldX;
-                prevCharWorldX = (prevWorldX + 1) % _map.MapWidth;
+                prevCharWorldX = _map.WrapX(prevWorldX + 1);
             }
             else
             {
                 // Moving right, up, down, or diagonal (DirectionX >= 0): '@' at snipe position, arrow to the right
                 prevCharWorldX = prevWorldX;
-                prevArrowWorldX = (prevWorldX + 1) % _map.MapWidth;
+                prevArrowWorldX = _map.WrapX(prevWorldX + 1);
             }
 
             // Always add both positions to clear list
@@ -2124,8 +2108,8 @@ public class Game : Window
             if (!snipe.IsAlive)
                 continue;
 
-            int snipeWorldX = (snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int snipeWorldY = (snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int snipeWorldX = _map.WrapX(snipe.X);
+            int snipeWorldY = _map.WrapY(snipe.Y);
 
             // Calculate current '@' and arrow positions based on current direction
             // Drawing logic: DirectionX < 0: arrow at center, '@' to right
@@ -2135,13 +2119,13 @@ public class Game : Window
             {
                 // Moving left: arrow at snipe position, '@' one cell to the right
                 arrowWorldX = snipeWorldX;
-                charWorldX = (snipeWorldX + 1) % _map.MapWidth;
+                charWorldX = _map.WrapX(snipeWorldX + 1);
             }
             else
             {
                 // Moving right, up, down, or diagonal (DirectionX >= 0): '@' at snipe position, arrow to the right
                 charWorldX = snipeWorldX;
-                arrowWorldX = (snipeWorldX + 1) % _map.MapWidth;
+                arrowWorldX = _map.WrapX(snipeWorldX + 1);
             }
             positionsToClear.Remove((charWorldX, snipeWorldY));
             positionsToClear.Remove((arrowWorldX, snipeWorldY));
@@ -2156,23 +2140,15 @@ public class Game : Window
             int deltaY = worldY - _player.Y;
 
             // Handle wrapping
-            if (deltaX > _map.MapWidth / 2)
-                deltaX -= _map.MapWidth;
-            else if (deltaX < -_map.MapWidth / 2)
-                deltaX += _map.MapWidth;
-
-            if (deltaY > _map.MapHeight / 2)
-                deltaY -= _map.MapHeight;
-            else if (deltaY < -_map.MapHeight / 2)
-                deltaY += _map.MapHeight;
+            _map.WrapDeltaX(ref deltaX);
+            _map.WrapDeltaY(ref deltaY);
 
             int viewportX = (frameWidth / 2) + deltaX;
             int viewportY = (frameHeight / 2) + deltaY;
 
             if (viewportX >= 0 && viewportX < frameWidth &&
                 viewportY >= 0 && viewportY < frameHeight &&
-                worldY >= 0 && worldY < _map.MapHeight &&
-                worldX >= 0 && worldX < _map.MapWidth)
+                _map.IsValidCoordinate(worldX, worldY))
             {
                 char mapChar = _map.FullMap[worldY][worldX];
                 Move(viewportX, viewportY + StatusBarHeight);
@@ -2191,15 +2167,8 @@ public class Game : Window
             int deltaY = snipe.Y - _player.Y;
 
             // Handle wrapping
-            if (deltaX > _map.MapWidth / 2)
-                deltaX -= _map.MapWidth;
-            else if (deltaX < -_map.MapWidth / 2)
-                deltaX += _map.MapWidth;
-
-            if (deltaY > _map.MapHeight / 2)
-                deltaY -= _map.MapHeight;
-            else if (deltaY < -_map.MapHeight / 2)
-                deltaY += _map.MapHeight;
+            _map.WrapDeltaX(ref deltaX);
+            _map.WrapDeltaY(ref deltaY);
 
             int viewportX = (frameWidth / 2) + deltaX;
             int viewportY = (frameHeight / 2) + deltaY;
@@ -2363,15 +2332,8 @@ public class Game : Window
         int deltaY = snipe.Y - _player.Y;
 
         // Handle wrapping
-        if (deltaX > _map.MapWidth / 2)
-            deltaX -= _map.MapWidth;
-        else if (deltaX < -_map.MapWidth / 2)
-            deltaX += _map.MapWidth;
-
-        if (deltaY > _map.MapHeight / 2)
-            deltaY -= _map.MapHeight;
-        else if (deltaY < -_map.MapHeight / 2)
-            deltaY += _map.MapHeight;
+        _map.WrapDeltaX(ref deltaX);
+        _map.WrapDeltaY(ref deltaY);
 
         int viewportX = (frameWidth / 2) + deltaX;
         int viewportY = (frameHeight / 2) + deltaY;
@@ -2403,8 +2365,7 @@ public class Game : Window
             // Clear '@' character position
             if (charViewportX >= 0 && charViewportX < frameWidth)
             {
-                char mapChar = _map.FullMap[(snipe.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight]
-                    [(snipe.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth];
+                char mapChar = _map.FullMap[_map.WrapY(snipe.Y)][_map.WrapX(snipe.X)];
                 Move(charViewportX, viewportY + StatusBarHeight);
                 AddRune(mapChar);
             }
@@ -2417,11 +2378,10 @@ public class Game : Window
                 int arrowWorldY = snipe.Y;
 
                 // Wrap coordinates
-                arrowWorldX = (arrowWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                arrowWorldY = (arrowWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                arrowWorldX = _map.WrapX(arrowWorldX);
+                arrowWorldY = _map.WrapY(arrowWorldY);
 
-                if (arrowWorldY >= 0 && arrowWorldY < _map.MapHeight &&
-                    arrowWorldX >= 0 && arrowWorldX < _map.MapWidth)
+                if (_map.IsValidCoordinate(arrowWorldX, arrowWorldY))
                 {
                     char arrowMapChar = _map.FullMap[arrowWorldY][arrowWorldX];
                     Move(arrowViewportX, viewportY + StatusBarHeight);
@@ -2447,15 +2407,8 @@ public class Game : Window
         int deltaY = hive.Y - _player.Y;
 
         // Handle wrapping
-        if (deltaX > _map.MapWidth / 2)
-            deltaX -= _map.MapWidth;
-        else if (deltaX < -_map.MapWidth / 2)
-            deltaX += _map.MapWidth;
-
-        if (deltaY > _map.MapHeight / 2)
-            deltaY -= _map.MapHeight;
-        else if (deltaY < -_map.MapHeight / 2)
-            deltaY += _map.MapHeight;
+        _map.WrapDeltaX(ref deltaX);
+        _map.WrapDeltaY(ref deltaY);
 
         int hiveViewportX = (frameWidth / 2) + deltaX;
         int hiveViewportY = (frameHeight / 2) + deltaY;
@@ -2467,8 +2420,8 @@ public class Game : Window
         if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
             hiveViewportY >= 0 && hiveViewportY < frameHeight)
         {
-            int worldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int worldY = (hive.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int worldX = _map.WrapX(hive.X);
+            int worldY = _map.WrapY(hive.Y);
             char mapChar = _map.FullMap[worldY][worldX];
             Move(hiveViewportX, hiveViewportY + StatusBarHeight);
             AddRune(mapChar);
@@ -2479,8 +2432,8 @@ public class Game : Window
         if (topRightX >= 0 && topRightX < frameWidth &&
             hiveViewportY >= 0 && hiveViewportY < frameHeight)
         {
-            int worldX = ((hive.X + 1) % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int worldY = (hive.Y % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int worldX = _map.WrapX(hive.X + 1);
+            int worldY = _map.WrapY(hive.Y);
             char mapChar = _map.FullMap[worldY][worldX];
             Move(topRightX, hiveViewportY + StatusBarHeight);
             AddRune(mapChar);
@@ -2491,8 +2444,8 @@ public class Game : Window
         if (hiveViewportX >= 0 && hiveViewportX < frameWidth &&
             bottomLeftY >= 0 && bottomLeftY < frameHeight)
         {
-            int worldX = (hive.X % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int worldY = ((hive.Y + 1) % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int worldX = _map.WrapX(hive.X);
+            int worldY = _map.WrapY(hive.Y + 1);
             char mapChar = _map.FullMap[worldY][worldX];
             Move(hiveViewportX, bottomLeftY + StatusBarHeight);
             AddRune(mapChar);
@@ -2502,8 +2455,8 @@ public class Game : Window
         if (topRightX >= 0 && topRightX < frameWidth &&
             bottomLeftY >= 0 && bottomLeftY < frameHeight)
         {
-            int worldX = ((hive.X + 1) % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-            int worldY = ((hive.Y + 1) % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+            int worldX = _map.WrapX(hive.X + 1);
+            int worldY = _map.WrapY(hive.Y + 1);
             char mapChar = _map.FullMap[worldY][worldX];
             Move(topRightX, bottomLeftY + StatusBarHeight);
             AddRune(mapChar);
@@ -2983,11 +2936,8 @@ public class Game : Window
             int deltaY = networkPlayer.Y - _player.Y;
             
             // Adjust delta for map wrapping to find shortest path
-            if (deltaX > _map.MapWidth / 2) deltaX -= _map.MapWidth;
-            else if (deltaX < -_map.MapWidth / 2) deltaX += _map.MapWidth;
-            
-            if (deltaY > _map.MapHeight / 2) deltaY -= _map.MapHeight;
-            else if (deltaY < -_map.MapHeight / 2) deltaY += _map.MapHeight;
+            _map.WrapDeltaX(ref deltaX);
+            _map.WrapDeltaY(ref deltaY);
             
             // Convert to viewport coordinates
             int viewportX = frameWidth / 2 + deltaX;
@@ -3065,11 +3015,8 @@ public class Game : Window
             int deltaY = networkPlayer.Y - _player.Y;
             
             // Adjust delta for map wrapping to find shortest path
-            if (deltaX > _map.MapWidth / 2) deltaX -= _map.MapWidth;
-            else if (deltaX < -_map.MapWidth / 2) deltaX += _map.MapWidth;
-            
-            if (deltaY > _map.MapHeight / 2) deltaY -= _map.MapHeight;
-            else if (deltaY < -_map.MapHeight / 2) deltaY += _map.MapHeight;
+            _map.WrapDeltaX(ref deltaX);
+            _map.WrapDeltaY(ref deltaY);
             
             // Always clear previous position before drawing new one (to prevent artifacts)
             // Check if we need to clear (position changed)
@@ -3925,8 +3872,8 @@ public class Game : Window
                 // Clear bullet at current position
                 int bulletWorldX = (int)Math.Round(bullet.X);
                 int bulletWorldY = (int)Math.Round(bullet.Y);
-                bulletWorldX = (bulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                bulletWorldY = (bulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
+                bulletWorldX = _map.WrapX(bulletWorldX);
+                bulletWorldY = _map.WrapY(bulletWorldY);
                 
                 int viewportX = bulletWorldX - mapOffsetX;
                 int viewportY = bulletWorldY - mapOffsetY;
@@ -3942,12 +3889,12 @@ public class Game : Window
                 }
                 
                 // Also clear bullet's previous position if different
-                int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
-                int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
-                prevBulletWorldX = (prevBulletWorldX % _map.MapWidth + _map.MapWidth) % _map.MapWidth;
-                prevBulletWorldY = (prevBulletWorldY % _map.MapHeight + _map.MapHeight) % _map.MapHeight;
-                
-                if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
+                    int prevBulletWorldX = (int)Math.Round(bullet.PreviousX);
+                    int prevBulletWorldY = (int)Math.Round(bullet.PreviousY);
+                    prevBulletWorldX = _map.WrapX(prevBulletWorldX);
+                    prevBulletWorldY = _map.WrapY(prevBulletWorldY);
+
+                    if (prevBulletWorldX != bulletWorldX || prevBulletWorldY != bulletWorldY)
                 {
                     int prevViewportX = prevBulletWorldX - mapOffsetX;
                     int prevViewportY = prevBulletWorldY - mapOffsetY;

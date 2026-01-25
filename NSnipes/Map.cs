@@ -142,6 +142,54 @@ public class Map
 
     }
 
+    /// <summary>
+    /// Wraps an X coordinate to map bounds using modulo arithmetic
+    /// </summary>
+    public int WrapX(int x)
+    {
+        return (x % MapWidth + MapWidth) % MapWidth;
+    }
+
+    /// <summary>
+    /// Wraps a Y coordinate to map bounds using modulo arithmetic
+    /// </summary>
+    public int WrapY(int y)
+    {
+        return (y % MapHeight + MapHeight) % MapHeight;
+    }
+
+    /// <summary>
+    /// Wraps a deltaX value to find the shortest path (accounting for map wrapping)
+    /// If the difference is more than half the map size, wrap around
+    /// </summary>
+    public void WrapDeltaX(ref int deltaX)
+    {
+        if (deltaX > MapWidth / 2)
+            deltaX -= MapWidth;
+        else if (deltaX < -MapWidth / 2)
+            deltaX += MapWidth;
+    }
+
+    /// <summary>
+    /// Wraps a deltaY value to find the shortest path (accounting for map wrapping)
+    /// If the difference is more than half the map size, wrap around
+    /// </summary>
+    public void WrapDeltaY(ref int deltaY)
+    {
+        if (deltaY > MapHeight / 2)
+            deltaY -= MapHeight;
+        else if (deltaY < -MapHeight / 2)
+            deltaY += MapHeight;
+    }
+
+    /// <summary>
+    /// Checks if the given coordinates are within valid map bounds
+    /// </summary>
+    public bool IsValidCoordinate(int x, int y)
+    {
+        return x >= 0 && x < MapWidth && y >= 0 && y < MapHeight;
+    }
+
     public string[] GetMap(int frameWidth, int frameHeight, int x, int y)
     {
         string[] rows = new string[frameHeight];
