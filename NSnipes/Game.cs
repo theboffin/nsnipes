@@ -1326,8 +1326,20 @@ public class Game : Window
                 string bulletId = bullet.BulletId;
                 PublishBulletUpdate(bullet, "hit", "player", networkPlayer.PlayerId);
                 
-                // Remove bullet
-                _bullets.RemoveAll(b => b.BulletId == bulletId);
+                // Remove bullet by finding index first (more efficient than RemoveAll)
+                int bulletIndexToRemove = -1;
+                for (int idx = 0; idx < _bullets.Count; idx++)
+                {
+                    if (_bullets[idx].BulletId == bulletId)
+                    {
+                        bulletIndexToRemove = idx;
+                        break;
+                    }
+                }
+                if (bulletIndexToRemove >= 0)
+                {
+                    _bullets.RemoveAt(bulletIndexToRemove);
+                }
                 
                 if (networkPlayer.IsLocal)
                 {
@@ -4275,7 +4287,21 @@ public class Game : Window
             }
             else if (update.Action == "died")
             {
-                _snipes.RemoveAll(s => s.SnipeId == update.SnipeId);
+                // Remove snipe by finding index first (more efficient than RemoveAll)
+                int snipeIndexToRemove = -1;
+                for (int idx = 0; idx < _snipes.Count; idx++)
+                {
+                    if (_snipes[idx].SnipeId == update.SnipeId)
+                    {
+                        snipeIndexToRemove = idx;
+                        break;
+                    }
+                }
+                if (snipeIndexToRemove >= 0)
+                {
+                    _snipes.RemoveAt(snipeIndexToRemove);
+                    _gameState.SnipesUndestroyed--;
+                }
             }
         }
     }
@@ -4321,7 +4347,21 @@ public class Game : Window
             }
             else if (update.Action == "destroyed")
             {
-                _hives.RemoveAll(h => $"hive_{h.X}_{h.Y}" == update.HiveId);
+                // Remove hive by finding index first (more efficient than RemoveAll)
+                int hiveIndexToRemove = -1;
+                for (int idx = 0; idx < _hives.Count; idx++)
+                {
+                    if ($"hive_{_hives[idx].X}_{_hives[idx].Y}" == update.HiveId)
+                    {
+                        hiveIndexToRemove = idx;
+                        break;
+                    }
+                }
+                if (hiveIndexToRemove >= 0)
+                {
+                    _hives.RemoveAt(hiveIndexToRemove);
+                    _gameState.HivesUndestroyed--;
+                }
             }
         }
     }
@@ -4362,13 +4402,15 @@ public class Game : Window
         }
         else if (bulletMsg.Action == "expired" || bulletMsg.Action == "hit")
         {
-            // Find and clear the bullet before removing it - avoid LINQ FirstOrDefault
+            // Find and clear the bullet before removing it - capture index for efficient removal
             Bullet? bullet = null;
-            foreach (var b in _bullets)
+            int bulletIndexToRemove = -1;
+            for (int idx = 0; idx < _bullets.Count; idx++)
             {
-                if (b.BulletId == bulletMsg.BulletId)
+                if (_bullets[idx].BulletId == bulletMsg.BulletId)
                 {
-                    bullet = b;
+                    bullet = _bullets[idx];
+                    bulletIndexToRemove = idx;
                     break;
                 }
             }
@@ -4431,8 +4473,11 @@ public class Game : Window
                 _cachedMapViewport = null;
             }
             
-            // Remove bullet
-            _bullets.RemoveAll(b => b.BulletId == bulletMsg.BulletId);
+            // Remove bullet by index (more efficient than RemoveAll)
+            if (bulletIndexToRemove >= 0)
+            {
+                _bullets.RemoveAt(bulletIndexToRemove);
+            }
         }
     }
     
