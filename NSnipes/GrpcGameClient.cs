@@ -31,6 +31,12 @@ public class GrpcGameClient : IDisposable
         {
             var serverUrl = server ?? DefaultServer;
             
+            if (string.IsNullOrWhiteSpace(serverUrl))
+            {
+                OnConnectionError?.Invoke("Cannot connect: Server URL is required");
+                return false;
+            }
+            
             // Configure HTTP/2 support for unencrypted connections (http://)
             // This is required for gRPC over plain HTTP
             // Must be set before creating any HttpClient or GrpcChannel
@@ -44,6 +50,16 @@ public class GrpcGameClient : IDisposable
             OnConnected?.Invoke();
             
             return true;
+        }
+        catch (UriFormatException ex)
+        {
+            OnConnectionError?.Invoke($"Connection error: Invalid server URL format - {ex.Message}");
+            return false;
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            OnConnectionError?.Invoke($"Connection gRPC error: {ex.Status.Detail}");
+            return false;
         }
         catch (Exception ex)
         {
@@ -84,7 +100,11 @@ public class GrpcGameClient : IDisposable
     public async Task<string> CreateGameAsync(string hostPlayerId, string hostInitials, int maxPlayers, int startingLevel)
     {
         if (_client == null || !_isConnected)
-            throw new InvalidOperationException("Not connected");
+        {
+            var error = "Cannot create game: Not connected to server";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error);
+        }
         
         try
         {
@@ -100,22 +120,54 @@ public class GrpcGameClient : IDisposable
             
             if (!response.Success)
             {
-                throw new Exception(response.ErrorMessage);
+                var error = $"Create game failed: {response.ErrorMessage}";
+                OnConnectionError?.Invoke(error);
+                throw new InvalidOperationException(error);
             }
             
             return response.GameId;
         }
+        catch (InvalidOperationException)
+        {
+            // Re-throw InvalidOperationException (already logged)
+            throw;
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            var error = $"Create game gRPC error: {ex.Status.Detail}";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error, ex);
+        }
         catch (Exception ex)
         {
-            OnConnectionError?.Invoke($"Create game error: {ex.Message}");
-            throw;
+            var error = $"Create game error: {ex.Message}";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error, ex);
         }
     }
     
     public async Task<JoinResponse> JoinGameAsync(string gameId, string playerId, string initials)
     {
         if (_client == null || !_isConnected)
-            throw new InvalidOperationException("Not connected");
+        {
+            var error = "Cannot join game: Not connected to server";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error);
+        }
+        
+        if (string.IsNullOrWhiteSpace(gameId))
+        {
+            var error = "Cannot join game: Game ID is required";
+            OnConnectionError?.Invoke(error);
+            throw new ArgumentException(error, nameof(gameId));
+        }
+        
+        if (string.IsNullOrWhiteSpace(playerId))
+        {
+            var error = "Cannot join game: Player ID is required";
+            OnConnectionError?.Invoke(error);
+            throw new ArgumentException(error, nameof(playerId));
+        }
         
         try
         {
@@ -128,17 +180,49 @@ public class GrpcGameClient : IDisposable
             
             return await _client.JoinGameAsync(request);
         }
+        catch (InvalidOperationException)
+        {
+            // Re-throw InvalidOperationException (already logged)
+            throw;
+        }
+        catch (ArgumentException)
+        {
+            // Re-throw ArgumentException (already logged)
+            throw;
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            var error = $"Join game gRPC error: {ex.Status.Detail}";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error, ex);
+        }
         catch (Exception ex)
         {
-            OnConnectionError?.Invoke($"Join game error: {ex.Message}");
-            throw;
+            var error = $"Join game error: {ex.Message}";
+            OnConnectionError?.Invoke(error);
+            throw new InvalidOperationException(error, ex);
         }
     }
     
     public async Task<bool> StartGameStreamAsync(string gameId, string playerId)
     {
-        if (_client == null || !_isConnected)
+        if (string.IsNullOrWhiteSpace(gameId))
+        {
+            OnConnectionError?.Invoke("Cannot start stream: Game ID is required");
             return false;
+        }
+        
+        if (string.IsNullOrWhiteSpace(playerId))
+        {
+            OnConnectionError?.Invoke("Cannot start stream: Player ID is required");
+            return false;
+        }
+        
+        if (_client == null || !_isConnected)
+        {
+            OnConnectionError?.Invoke("Cannot start stream: Not connected to server");
+            return false;
+        }
         
         try
         {
@@ -166,7 +250,11 @@ public class GrpcGameClient : IDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    // Expected when disconnecting
+                    // Expected when disconnecting - don't log as error
+                }
+                catch (Grpc.Core.RpcException ex)
+                {
+                    OnConnectionError?.Invoke($"Stream receive gRPC error: {ex.Status.Detail}");
                 }
                 catch (Exception ex)
                 {
@@ -186,6 +274,11 @@ public class GrpcGameClient : IDisposable
             
             return true;
         }
+        catch (Grpc.Core.RpcException ex)
+        {
+            OnConnectionError?.Invoke($"Start stream gRPC error: {ex.Status.Detail}");
+            return false;
+        }
         catch (Exception ex)
         {
             OnConnectionError?.Invoke($"Start stream error: {ex.Message}");
@@ -195,13 +288,32 @@ public class GrpcGameClient : IDisposable
     
     public async Task<bool> SendGameMessageAsync(GameMessage message)
     {
-        if (_stream == null || !_isConnected)
+        if (message == null)
+        {
+            OnConnectionError?.Invoke("Cannot send message: Message is null");
             return false;
+        }
+        
+        if (_stream == null || !_isConnected)
+        {
+            OnConnectionError?.Invoke("Cannot send message: Not connected to server");
+            return false;
+        }
         
         try
         {
             await _stream.RequestStream.WriteAsync(message);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when disconnecting - don't log as error
+            return false;
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            OnConnectionError?.Invoke($"Send message gRPC error: {ex.Status.Detail}");
+            return false;
         }
         catch (Exception ex)
         {

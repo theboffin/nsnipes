@@ -1,4 +1,4 @@
-﻿using Terminal.Gui.App;
+using Terminal.Gui.App;
 using Terminal.Gui.Views;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Input;
@@ -1239,7 +1239,16 @@ public class Game : Window
     
     private void CheckBulletPlayerCollision(Bullet bullet, int frameWidth, int frameHeight, int mapOffsetX, int mapOffsetY)
     {
-        if (_gameSession == null || _grpcClient == null)
+        if (bullet == null)
+            return;
+        
+        if (!_isMultiplayer)
+            return;
+        
+        if (_gameSession == null)
+            return;
+        
+        if (_grpcClient == null)
             return;
         
         int bulletWorldX = (int)Math.Round(bullet.X);
@@ -1585,7 +1594,19 @@ public class Game : Window
     
     private void PublishSnipeSpawn(Snipe snipe)
     {
-        if (_gameSession == null || _grpcClient == null)
+        if (snipe == null)
+            return;
+        
+        if (!_isMultiplayer)
+            return;
+        
+        if (_gameSession == null)
+            return;
+        
+        if (_gameSession.Role != GameSessionRole.Host)
+            return;
+        
+        if (_grpcClient == null)
             return;
         
         var gameMessage = CreateBaseGameMessage();
@@ -1608,7 +1629,13 @@ public class Game : Window
     
     private void PublishSnipeUpdates()
     {
-        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
+        if (!_isMultiplayer)
+            return;
+        
+        if (_gameSession == null)
+            return;
+        
+        if (_gameSession.Role != GameSessionRole.Host)
             return;
         
         // Publish all current snipe positions (periodic update)
@@ -1617,7 +1644,7 @@ public class Game : Window
         int aliveCount = 0;
         foreach (var s in _snipes)
         {
-            if (s.IsAlive) aliveCount++;
+            if (s != null && s.IsAlive) aliveCount++;
         }
         
         if (aliveCount > 0)
@@ -3219,9 +3246,18 @@ public class Game : Window
                 // Update waiting screen with actual game ID immediately
                 _introScreen.ShowWaitingForPlayers(gameId, maxPlayers, isHost: true);
             }
+            catch (InvalidOperationException ex)
+            {
+                // Failed to create game (already logged via OnConnectionError) - show error message
+                _introScreen.ShowWaitingForPlayers($"ERROR: {ex.Message}", maxPlayers, isHost: true);
+                // Wait a moment so user can see the error
+                await Task.Delay(2000);
+                _introScreen.Show();
+                return;
+            }
             catch (Exception ex)
             {
-                // Failed to create game - show error message
+                // Unexpected error - show error message
                 _introScreen.ShowWaitingForPlayers($"ERROR: {ex.Message}", maxPlayers, isHost: true);
                 // Wait a moment so user can see the error
                 await Task.Delay(2000);
@@ -3293,6 +3329,12 @@ public class Game : Window
     
     private async Task JoinGame(string gameId)
     {
+        if (string.IsNullOrWhiteSpace(gameId))
+        {
+            _introScreen.Show();
+            return;
+        }
+        
         try
         {
             // Create gRPC client
@@ -3317,10 +3359,28 @@ public class Game : Window
             {
                 joinResponse = await _grpcClient.JoinGameAsync(gameId.ToUpper(), playerId, _player.Initials);
             }
+            catch (InvalidOperationException)
+            {
+                // Failed to join game (already logged via OnConnectionError) - return to menu
+                _introScreen.Show();
+                return;
+            }
+            catch (ArgumentException)
+            {
+                // Invalid arguments (already logged via OnConnectionError) - return to menu
+                _introScreen.Show();
+                return;
+            }
             catch (Exception)
             {
-                // Failed to join game - return to menu
-                // Note: Error handling is done via exception, OnConnectionError is for connection-level errors
+                // Unexpected error - return to menu
+                // Note: GrpcGameClient should have logged this via OnConnectionError
+                _introScreen.Show();
+                return;
+            }
+            
+            if (joinResponse == null)
+            {
                 _introScreen.Show();
                 return;
             }
@@ -3363,19 +3423,26 @@ public class Game : Window
         }
         catch (Exception)
         {
+            // Unexpected error - return to menu
             _introScreen.Show();
         }
     }
     
     private void HandleGrpcMessage(GameMessage message)
     {
+        if (message == null)
+            return;
+        
         try
         {
-            if (_gameSession == null || message.GameId != _gameSession.GameId)
+            if (_gameSession == null)
+                return;
+            
+            if (string.IsNullOrWhiteSpace(message.GameId) || message.GameId != _gameSession.GameId)
                 return;
             
             // Ignore messages from self
-            if (message.PlayerId == _gameSession.PlayerId)
+            if (!string.IsNullOrWhiteSpace(message.PlayerId) && message.PlayerId == _gameSession.PlayerId)
                 return;
             
             // Handle player join notifications
@@ -3618,12 +3685,16 @@ public class Game : Window
         }
         catch (Exception)
         {
-            // Handle error silently or log
+            // Errors in message handling are non-critical - gRPC client already logs connection errors
+            // Silently handle to prevent game from crashing due to malformed messages
         }
     }
     
     private void HandleGameStateSnapshot(GameStateSnapshot snapshot)
     {
+        if (snapshot == null)
+            return;
+        
         // Client receives game state snapshot from host
         try
         {
@@ -3634,131 +3705,169 @@ public class Game : Window
             _hives.Clear();
             // Calculate snipes per hive from level (needed for Hive constructor)
             int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(snapshot.Level);
-            foreach (var hiveState in snapshot.Hives)
+            if (snapshot.Hives != null)
             {
-                var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive, _currentFrameTime)
+                foreach (var hiveState in snapshot.Hives)
                 {
-                    Hits = hiveState.Hits,
-                    IsDestroyed = hiveState.IsDestroyed,
-                    SnipesRemaining = hiveState.SnipesRemaining,
-                    FlashIntervalMs = hiveState.FlashIntervalMs
-                };
-                _hives.Add(hive);
+                    if (hiveState == null)
+                        continue;
+                    
+                    var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive, _currentFrameTime)
+                    {
+                        Hits = hiveState.Hits,
+                        IsDestroyed = hiveState.IsDestroyed,
+                        SnipesRemaining = hiveState.SnipesRemaining,
+                        FlashIntervalMs = hiveState.FlashIntervalMs
+                    };
+                    _hives.Add(hive);
+                }
             }
-            _gameState.TotalHives = snapshot.Hives.Count;
-            _gameState.HivesUndestroyed = snapshot.Hives.Count(h => !h.IsDestroyed);
+            _gameState.TotalHives = snapshot.Hives?.Count ?? 0;
+            // Count undestroyed hives manually to avoid LINQ allocation
+            int undestroyedCount = 0;
+            if (snapshot.Hives != null)
+            {
+                foreach (var h in snapshot.Hives)
+                {
+                    if (h != null && !h.IsDestroyed)
+                        undestroyedCount++;
+                }
+            }
+            _gameState.HivesUndestroyed = undestroyedCount;
             
             // Update snipes from host
             // IMPORTANT: snipeState.X and snipeState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
             _snipes.Clear();
-            foreach (var snipeState in snapshot.Snipes)
+            if (snapshot.Snipes != null)
             {
-                if (snipeState.IsAlive)
+                foreach (var snipeState in snapshot.Snipes)
                 {
-                    var snipe = new Snipe(snipeState.X, snipeState.Y, !string.IsNullOrEmpty(snipeState.Type) ? snipeState.Type[0] : 'A')  // World coordinates
+                    if (snipeState == null)
+                        continue;
+                    
+                    if (snipeState.IsAlive)
                     {
-                        DirectionX = snipeState.DirectionX,
-                        DirectionY = snipeState.DirectionY,
-                        IsAlive = snipeState.IsAlive
-                    };
-                    _snipes.Add(snipe);
+                        var snipe = new Snipe(snipeState.X, snipeState.Y, !string.IsNullOrEmpty(snipeState.Type) ? snipeState.Type[0] : 'A')  // World coordinates
+                        {
+                            DirectionX = snipeState.DirectionX,
+                            DirectionY = snipeState.DirectionY,
+                            IsAlive = snipeState.IsAlive
+                        };
+                        _snipes.Add(snipe);
+                    }
                 }
             }
-            _gameState.TotalSnipes = snapshot.Snipes.Count;
-            _gameState.SnipesUndestroyed = snapshot.Snipes.Count(s => s.IsAlive);
+            
+            // Count alive snipes manually to avoid LINQ allocation
+            int aliveCount = 0;
+            if (snapshot.Snipes != null)
+            {
+                foreach (var s in snapshot.Snipes)
+                {
+                    if (s != null && s.IsAlive)
+                        aliveCount++;
+                }
+            }
+            _gameState.SnipesUndestroyed = aliveCount;
             
             // Update player states
             // IMPORTANT: playerState.X and playerState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
-            foreach (var playerState in snapshot.Players)
+            if (snapshot.Players != null)
             {
-                if (_networkPlayers.TryGetValue(playerState.PlayerId, out var networkPlayer))
+                foreach (var playerState in snapshot.Players)
                 {
-                    // Store world coordinates - conversion to viewport happens when drawing
-                    // Update previous position to avoid artifacts
-                    networkPlayer.PreviousX = networkPlayer.X;
-                    networkPlayer.PreviousY = networkPlayer.Y;
-                    networkPlayer.X = playerState.X;  // World coordinate
-                    networkPlayer.Y = playerState.Y;  // World coordinate
-                    networkPlayer.Lives = playerState.Lives;
-                    networkPlayer.Score = playerState.Score;
-                    networkPlayer.IsAlive = playerState.IsAlive;
-                    // Update initials from game state (in case they were "??" before)
-                    if (!string.IsNullOrEmpty(playerState.Initials))
-                    {
-                        networkPlayer.Initials = playerState.Initials;
-                    }
+                    if (playerState == null)
+                        continue;
                     
-                    if (networkPlayer.IsLocal)
+                    if (_networkPlayers.TryGetValue(playerState.PlayerId, out var networkPlayer))
                     {
-                        _player.X = playerState.X;  // World coordinate
-                        _player.Y = playerState.Y;  // World coordinate
-                        _player.Lives = playerState.Lives;
-                        _player.Score = playerState.Score;
-                        _player.IsAlive = playerState.IsAlive;
-                        // Update local player initials too
+                        // Store world coordinates - conversion to viewport happens when drawing
+                        // Update previous position to avoid artifacts
+                        networkPlayer.PreviousX = networkPlayer.X;
+                        networkPlayer.PreviousY = networkPlayer.Y;
+                        networkPlayer.X = playerState.X;  // World coordinate
+                        networkPlayer.Y = playerState.Y;  // World coordinate
+                        networkPlayer.Lives = playerState.Lives;
+                        networkPlayer.Score = playerState.Score;
+                        networkPlayer.IsAlive = playerState.IsAlive;
+                        // Update initials from game state (in case they were "??" before)
                         if (!string.IsNullOrEmpty(playerState.Initials))
                         {
-                            _player.Initials = playerState.Initials;
+                            networkPlayer.Initials = playerState.Initials;
                         }
-                        _cachedMapViewport = null; // Force map redraw
-                    }
-                }
-                else
-                {
-                    // New player not in our network players list - create them (avoid LINQ FirstOrDefault)
-                    NetworkPlayerInfo? playerInfo = null;
-                    if (_gameSession != null)
-                    {
-                        foreach (var p in _gameSession.Players)
+                        
+                        if (networkPlayer.IsLocal)
                         {
-                            if (p.PlayerId == playerState.PlayerId)
+                            _player.X = playerState.X;  // World coordinate
+                            _player.Y = playerState.Y;  // World coordinate
+                            _player.Lives = playerState.Lives;
+                            _player.Score = playerState.Score;
+                            _player.IsAlive = playerState.IsAlive;
+                            // Update local player initials too
+                            if (!string.IsNullOrEmpty(playerState.Initials))
                             {
-                                playerInfo = p;
-                                break;
+                                _player.Initials = playerState.Initials;
+                            }
+                            _cachedMapViewport = null; // Force map redraw
+                        }
+                    }
+                    else
+                    {
+                        // New player not in our network players list - create them (avoid LINQ FirstOrDefault)
+                        NetworkPlayerInfo? playerInfo = null;
+                        if (_gameSession != null)
+                        {
+                            foreach (var p in _gameSession.Players)
+                            {
+                                if (p.PlayerId == playerState.PlayerId)
+                                {
+                                    playerInfo = p;
+                                    break;
+                                }
                             }
                         }
-                    }
-                    var isLocalPlayer = playerState.PlayerId == _gameSession?.PlayerId;
-                    
-                    // Create network player even if not in game session (shouldn't happen, but be safe)
-                    var newNetworkPlayer = new PlayerNetwork(
-                        playerState.PlayerId,
-                        !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : (playerInfo?.Initials ?? "??"),
-                        playerInfo?.PlayerNumber ?? 0,
-                        isLocal: isLocalPlayer
-                    );
-                    newNetworkPlayer.PreviousX = playerState.X;
-                    newNetworkPlayer.PreviousY = playerState.Y;
-                    newNetworkPlayer.X = playerState.X;
-                    newNetworkPlayer.Y = playerState.Y;
-                    newNetworkPlayer.Lives = playerState.Lives;
-                    newNetworkPlayer.Score = playerState.Score;
-                    newNetworkPlayer.IsAlive = playerState.IsAlive;
-                    _networkPlayers[playerState.PlayerId] = newNetworkPlayer;
-                    
-                    // Also add to game session if not already there
-                    if (playerInfo == null && _gameSession != null)
-                    {
-                        _gameSession.Players.Add(new NetworkPlayerInfo
+                        var isLocalPlayer = playerState.PlayerId == _gameSession?.PlayerId;
+                        
+                        // Create network player even if not in game session (shouldn't happen, but be safe)
+                        var newNetworkPlayer = new PlayerNetwork(
+                            playerState.PlayerId,
+                            !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : (playerInfo?.Initials ?? "??"),
+                            playerInfo?.PlayerNumber ?? 0,
+                            isLocal: isLocalPlayer
+                        );
+                        newNetworkPlayer.PreviousX = playerState.X;
+                        newNetworkPlayer.PreviousY = playerState.Y;
+                        newNetworkPlayer.X = playerState.X;
+                        newNetworkPlayer.Y = playerState.Y;
+                        newNetworkPlayer.Lives = playerState.Lives;
+                        newNetworkPlayer.Score = playerState.Score;
+                        newNetworkPlayer.IsAlive = playerState.IsAlive;
+                        _networkPlayers[playerState.PlayerId] = newNetworkPlayer;
+                        
+                        // Also add to game session if not already there
+                        if (playerInfo == null && _gameSession != null)
                         {
-                            PlayerId = playerState.PlayerId,
-                            Initials = !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : "??",
-                            PlayerNumber = 0
-                        });
-                    }
-                    
-                    if (newNetworkPlayer.IsLocal)
-                    {
-                        _player.X = playerState.X;
-                        _player.Y = playerState.Y;
-                        _player.Lives = playerState.Lives;
-                        _player.Score = playerState.Score;
-                        _player.IsAlive = playerState.IsAlive;
-                        if (!string.IsNullOrEmpty(playerState.Initials))
-                        {
-                            _player.Initials = playerState.Initials;
+                            _gameSession.Players.Add(new NetworkPlayerInfo
+                            {
+                                PlayerId = playerState.PlayerId,
+                                Initials = !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : "??",
+                                PlayerNumber = 0
+                            });
                         }
-                        _cachedMapViewport = null;
+                        
+                        if (newNetworkPlayer.IsLocal)
+                        {
+                            _player.X = playerState.X;
+                            _player.Y = playerState.Y;
+                            _player.Lives = playerState.Lives;
+                            _player.Score = playerState.Score;
+                            _player.IsAlive = playerState.IsAlive;
+                            if (!string.IsNullOrEmpty(playerState.Initials))
+                            {
+                                _player.Initials = playerState.Initials;
+                            }
+                            _cachedMapViewport = null;
+                        }
                     }
                 }
             }
@@ -3769,15 +3878,28 @@ public class Game : Window
         }
         catch (Exception)
         {
-            // Handle error silently
+            // Errors in state snapshot handling are non-critical - game can continue with partial state
+            // Silently handle to prevent game from crashing due to malformed snapshots
         }
     }
     
     private void HandleSnipeUpdatesGrpc(SnipeUpdates updates)
     {
+        if (updates == null)
+            return;
+        
+        if (updates.Updates == null)
+            return;
+        
         // Convert gRPC snipe updates to internal format
         foreach (var update in updates.Updates)
         {
+            if (update == null)
+                continue;
+            
+            if (string.IsNullOrWhiteSpace(update.Action))
+                continue;
+            
             if (update.Action == "spawned")
             {
                 // Create new snipe
@@ -3814,9 +3936,21 @@ public class Game : Window
     
     private void HandleHiveUpdatesGrpc(HiveUpdates updates)
     {
+        if (updates == null)
+            return;
+        
+        if (updates.Updates == null)
+            return;
+        
         // Convert gRPC hive updates to internal format
         foreach (var update in updates.Updates)
         {
+            if (update == null)
+                continue;
+            
+            if (string.IsNullOrWhiteSpace(update.Action))
+                continue;
+            
             if (update.Action == "spawned")
             {
                 // Hives are spawned at game start, so this might not be needed
@@ -3848,6 +3982,12 @@ public class Game : Window
     
     private void HandleBulletMessageGrpc(BulletUpdate bulletMsg, string playerId)
     {
+        if (bulletMsg == null)
+            return;
+        
+        if (string.IsNullOrWhiteSpace(bulletMsg.Action))
+            return;
+        
         if (bulletMsg.Action == "fired")
         {
             // Add remote bullet to our list
@@ -3954,10 +4094,20 @@ public class Game : Window
     
     /// <summary>
     /// Creates a base GameMessage with common fields (GameId, PlayerId, Timestamp)
+    /// Returns null if game session or gRPC client is not available (caller should handle null)
     /// </summary>
     private GameMessage? CreateBaseGameMessage(string? playerId = null)
     {
-        if (_gameSession == null || _grpcClient == null)
+        if (_gameSession == null)
+            return null;
+        
+        if (_grpcClient == null)
+            return null;
+        
+        if (string.IsNullOrWhiteSpace(_gameSession.GameId))
+            return null;
+        
+        if (string.IsNullOrWhiteSpace(_gameSession.PlayerId) && string.IsNullOrWhiteSpace(playerId))
             return null;
         
         return new GameMessage
@@ -3970,13 +4120,18 @@ public class Game : Window
     
     /// <summary>
     /// Sends a GameMessage using fire-and-forget pattern
+    /// Silently handles errors (fire-and-forget pattern for non-critical messages)
     /// </summary>
     private void SendGameMessage(GameMessage? gameMessage)
     {
-        if (gameMessage != null && _grpcClient != null)
-        {
-            _ = _grpcClient.SendGameMessageAsync(gameMessage);
-        }
+        if (gameMessage == null)
+            return;
+        
+        if (_grpcClient == null)
+            return;
+        
+        // Fire-and-forget: don't await, errors are handled by GrpcGameClient
+        _ = _grpcClient.SendGameMessageAsync(gameMessage);
     }
     
     private void PublishPlayerPosition()
@@ -4011,6 +4166,21 @@ public class Game : Window
     
     private void PublishBulletUpdate(Bullet bullet, string action, string? hitType = null, string? hitTargetId = null)
     {
+        if (bullet == null)
+            return;
+        
+        if (string.IsNullOrWhiteSpace(action))
+            return;
+        
+        if (!_isMultiplayer)
+            return;
+        
+        if (_gameSession == null)
+            return;
+        
+        if (_grpcClient == null)
+            return;
+        
         var gameMessage = CreateBaseGameMessage(bullet.PlayerId);
         if (gameMessage == null)
             return;
@@ -4032,7 +4202,13 @@ public class Game : Window
     
     private void PublishPlayerCountUpdate()
     {
-        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
+        if (!_isMultiplayer)
+            return;
+        
+        if (_gameSession == null)
+            return;
+        
+        if (_gameSession.Role != GameSessionRole.Host)
             return;
         
         var gameMessage = CreateBaseGameMessage();
@@ -4062,7 +4238,13 @@ public class Game : Window
     
     private async void StartMultiplayerGameSession()
     {
-        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
+        if (!_isMultiplayer)
+            return;
+        
+        if (_gameSession == null)
+            return;
+        
+        if (_gameSession.Role != GameSessionRole.Host)
             return;
         
         _gameSession.Status = GameSessionStatus.Starting;
@@ -4093,8 +4275,11 @@ public class Game : Window
         }
         
         // Publish game start message (gRPC doesn't use subscriptions - messages come through the stream)
+        if (_grpcClient == null)
+            return;
+        
         var gameMessage = CreateBaseGameMessage();
-        if (gameMessage == null || _grpcClient == null)
+        if (gameMessage == null)
             return;
         
         gameMessage.GameStart = new GameStartMessage
@@ -4208,7 +4393,10 @@ public class Game : Window
     
     private void PublishGameStateSnapshot()
     {
-        if (_gameSession == null || _gameSession.Role != GameSessionRole.Host)
+        if (_gameSession == null)
+            return;
+        
+        if (_gameSession.Role != GameSessionRole.Host)
             return;
         
         // IMPORTANT: All coordinates in gRPC messages must be WORLD/MAP coordinates, not viewport coordinates
