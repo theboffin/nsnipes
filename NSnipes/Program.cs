@@ -46,10 +46,9 @@ catch
     }
 }
 
-// Disable default Escape key quit behavior - we handle Escape ourselves in the Game class
-// Set QuitKey to F12 (unused key) instead of Escape
-// In Terminal.Gui v2, Key is created from character
-Application.QuitKey = new Key((char)0x7B); // F12 key code
+// Set global application exit key to CTRL-C
+// Use Key.C.WithCtrl to create CTRL-C key
+Application.QuitKey = Key.C.WithCtrl;
 
 var game = new Game(app);
 

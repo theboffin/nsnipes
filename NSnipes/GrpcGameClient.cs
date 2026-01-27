@@ -21,7 +21,7 @@ public class GrpcGameClient : IDisposable
     public event Action<string>? OnConnectionError;
     
     // Server configuration
-    private const string DefaultServer = "http://localhost:5000";
+    private const string DefaultServer = "http://127.0.0.1:5000";
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
     
     public bool IsConnected => _isConnected && _stream != null;

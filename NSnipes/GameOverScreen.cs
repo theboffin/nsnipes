@@ -151,8 +151,8 @@ public class GameOverScreen : View
         int width = Frame.Width;
         int height = Frame.Height;
         
-        // Clear screen with blue background first
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Clear screen with black background first (matches main game)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
             Move(0, y);
@@ -213,10 +213,23 @@ public class GameOverScreen : View
     
     private void DrawBanner(int startX, int screenHeight)
     {
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
-        
         // Banner is 7 rows tall, positioned in upper third of screen
         int bannerStartY = screenHeight / 4;
+        
+        // First, clear the banner area to black to ensure clean background
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+        int bannerWidth = (7 * 4 + 3 * 2) + 6 + (7 * 4 + 3 * 2); // GAME + gap + OVER
+        for (int y = bannerStartY; y < bannerStartY + 9 && y < screenHeight; y++)
+        {
+            for (int x = Math.Max(0, startX - 2); x < Math.Min(Frame.Width, startX + bannerWidth + 2); x++)
+            {
+                Move(x, y);
+                AddRune(new System.Text.Rune(' '));
+            }
+        }
+        
+        // Draw GAME OVER banner with white blocks on black background
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         
         // Draw GAME (4 letters) with 2-column gaps between letters
         string[][] gameLetters = { BannerG, BannerA, BannerM, BannerE };
@@ -238,6 +251,7 @@ public class GameOverScreen : View
                         if (x >= 0 && x < Frame.Width)
                         {
                             Move(x, y);
+                            // Banner characters are white blocks on black background
                             AddRune(new System.Text.Rune(letter[row][col]));
                         }
                     }
@@ -270,6 +284,7 @@ public class GameOverScreen : View
                         if (x >= 0 && x < Frame.Width)
                         {
                             Move(x, y);
+                            // Banner characters are white blocks on black background
                             AddRune(new System.Text.Rune(letter[row][col]));
                         }
                     }
@@ -300,7 +315,7 @@ public class GameOverScreen : View
         int headerX = (width - scoresHeader.Length) / 2;
         int headerY = scoresStartY;
         
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(headerX, headerY);
         foreach (char c in scoresHeader)
         {
@@ -322,14 +337,14 @@ public class GameOverScreen : View
                     string scoreText = $"{player.Initials}: {player.Score}";
                     int x = (width - scoreText.Length) / 2;
                     
-                    // Top player in cyan, others in yellow
+                    // Top player in cyan, others in yellow (on black background)
                     if (i == 0)
                     {
-                        SetAttribute(new DrawingAttribute(Color.Cyan, Color.Blue));
+                        SetAttribute(new DrawingAttribute(Color.Cyan, Color.Black));
                     }
                     else
                     {
-                        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Blue));
+                        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
                     }
                     
                     Move(x, y);
@@ -345,7 +360,7 @@ public class GameOverScreen : View
         string enterMessage = "Press ENTER to continue";
         int enterX = (width - enterMessage.Length) / 2;
         int enterY = height - 2;
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(enterX, enterY);
         foreach (char c in enterMessage)
         {

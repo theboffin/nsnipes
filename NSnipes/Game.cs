@@ -189,23 +189,28 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         // Handle keyboard input using IApplication.Keyboard.KeyDown
         _app.Keyboard.KeyDown += (sender, key) =>
         {
-            var keyStr = key.ToString();
-            
-            // Handle Escape key
-            if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+            // Handle CTRL-C for global application exit
+            // Use Key API: check if key is CTRL-C (Ctrl+C)
+            if (key.IsCtrl && key == Key.C)
             {
-                if (_introScreen.IsActive)
-                {
-                    // Exit application from intro screen
-                    _app.RequestStop();
-                }
-                else
+                // Exit application
+                _app.RequestStop();
+                return;
+            }
+            
+            // Handle Escape key for returning to menu (not exit)
+            // Use Key.Esc for proper Escape key detection
+            if (key == Key.Esc)
+            {
+                if (!_introScreen.IsActive)
                 {
                     // Return to intro screen from game
                     _introScreen.Show();
                     _introScreen.SetNeedsDraw();
+                    return;
                 }
-                return;
+                // If intro screen is active, pass Escape to HandleKeyDown so it can reach IntroScreen
+                // This allows Escape to work in input screens (level select, player count, etc.)
             }
             
             // For other keys, handle them inline
@@ -356,23 +361,27 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
     private void HandleWindowKeyDown(object? sender, Key key)
     {
-        var keyStr = key.ToString();
-        
-        // Handle Escape key at Window level to prevent default close behavior
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+        // Handle CTRL-C for global application exit
+        // Use Key API: check if key is CTRL-C (Ctrl+C)
+        if (key.IsCtrl && key == Key.C)
         {
-            if (_introScreen.IsActive)
-            {
-                // Exit application from intro screen
-                _app.RequestStop();
-            }
-            else
+            // Exit application
+            _app.RequestStop();
+            return;
+        }
+        
+        // Handle Escape key for returning to menu (not exit)
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
+        {
+            if (!_introScreen.IsActive)
             {
                 // Return to intro screen from game
                 _introScreen.Show();
+                return;
             }
-            // Don't process further - this prevents Window's default Escape handling
-            return;
+            // If intro screen is active, let it handle Escape (for canceling input, etc.)
+            // Don't return here - let it fall through to HandleKeyDown so IntroScreen can process it
         }
 
         // For other keys, let them process normally
@@ -394,18 +403,19 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
     private void HandleKeyDown(object? sender, Key key)
     {
-        var keyStr = key.ToString();
-        
-        // Escape is handled at Application level, so skip it here
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
-        {
-            return;
-        }
-
-        // Handle intro screen key press (including game over)
+        // Handle intro screen key press (including game over and Escape key)
+        // This must be called BEFORE checking if Escape should be skipped
+        // so that Escape can be processed by input handlers
         if (_introScreen.HandleKey(key))
         {
             return; // Intro screen handled the key
+        }
+
+        // Escape is handled at Application level for non-intro-screen cases
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
+        {
+            return;
         }
 
         // Don't process game keys if intro screen is active or game is over
@@ -423,22 +433,23 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         string? normalizedKey = null;
         
         // Check for movement keys (arrow keys and numeric keypad)
-        if (keyStr.Contains("CursorUp"))
+        // Use Key API for cursor keys
+        if (key == Key.CursorUp)
         {
             normalizedKey = "Up";
             movementKeyPressed = true;
         }
-        else if (keyStr.Contains("CursorDown"))
+        else if (key == Key.CursorDown)
         {
             normalizedKey = "Down";
             movementKeyPressed = true;
         }
-        else if (keyStr.Contains("CursorLeft"))
+        else if (key == Key.CursorLeft)
         {
             normalizedKey = "Left";
             movementKeyPressed = true;
         }
-        else if (keyStr.Contains("CursorRight"))
+        else if (key == Key.CursorRight)
         {
             normalizedKey = "Right";
             movementKeyPressed = true;
@@ -446,12 +457,16 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         else
         {
             // Check for numeric keypad keys (1-9)
-            char firstChar = keyStr.Length > 0 ? keyStr[0] : '\0';
-            if (firstChar >= '1' && firstChar <= '9')
-            {
-                normalizedKey = firstChar.ToString();
-                movementKeyPressed = true;
-            }
+            // Use Key API for digit keys
+            if (key == Key.D1) { normalizedKey = "1"; movementKeyPressed = true; }
+            else if (key == Key.D2) { normalizedKey = "2"; movementKeyPressed = true; }
+            else if (key == Key.D3) { normalizedKey = "3"; movementKeyPressed = true; }
+            else if (key == Key.D4) { normalizedKey = "4"; movementKeyPressed = true; }
+            else if (key == Key.D5) { normalizedKey = "5"; movementKeyPressed = true; }
+            else if (key == Key.D6) { normalizedKey = "6"; movementKeyPressed = true; }
+            else if (key == Key.D7) { normalizedKey = "7"; movementKeyPressed = true; }
+            else if (key == Key.D8) { normalizedKey = "8"; movementKeyPressed = true; }
+            else if (key == Key.D9) { normalizedKey = "9"; movementKeyPressed = true; }
         }
         
         if (movementKeyPressed && normalizedKey != null)
@@ -486,63 +501,78 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             double velY = 0;
             bool shouldFire = false;
 
-            // Extract the character from the key string
-            char keyChar = keyStr.Length > 0 ? char.ToUpper(keyStr[0]) : '\0';
+            // Use Key API to check for firing keys
+            // Remove modifiers to compare base key (case-insensitive)
+            Key keyNoModifiers = key.NoShift.NoCtrl.NoAlt;
             
-            switch (keyChar)
+            // Check for firing keys (Q, W, E, A, D, Z, X, C) - case-insensitive
+            if (keyNoModifiers == Key.Q || keyNoModifiers == Key.Q.WithShift)
             {
-                case 'Q': // Diagonal left/up - fire from top-left corner
-                    startX = _player.X;
-                    startY = _player.Y;
-                    velX = -BulletSpeed;
-                    velY = -BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'W': // Up - fire from top center
-                    startX = _player.X + 0.5; // Center of player width
-                    startY = _player.Y;
-                    velY = -BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'E': // Diagonal right/up - fire from top-right corner
-                    startX = _player.X + (PlayerWidth - 1); // Right column
-                    startY = _player.Y;
-                    velX = BulletSpeed;
-                    velY = -BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'A': // Left - fire from left center
-                    startX = _player.X;
-                    startY = _player.Y + 1.0;
-                    velX = -BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'D': // Right - fire from right center
-                    startX = _player.X + (PlayerWidth - 1); // Right column
-                    startY = _player.Y + 1.0; // Middle row
-                    velX = BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'Z': // Diagonal left/down - fire from bottom-left corner
-                    startX = _player.X;
-                    startY = _player.Y + (PlayerHeight - 1); // Bottom row
-                    velX = -BulletSpeed;
-                    velY = BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'X': // Down - fire from bottom center
-                    startX = _player.X + 0.5; // Center of player width
-                    startY = _player.Y + (PlayerHeight - 1); // Bottom row
-                    velY = BulletSpeed;
-                    shouldFire = true;
-                    break;
-                case 'C': // Diagonal right/down - fire from bottom-right corner
-                    startX = _player.X + (PlayerWidth - 1); // Right column
-                    startY = _player.Y + (PlayerHeight - 1); // Bottom row
-                    velX = BulletSpeed;
-                    velY = BulletSpeed;
-                    shouldFire = true;
-                    break;
+                // Diagonal left/up - fire from top-left corner
+                startX = _player.X;
+                startY = _player.Y;
+                velX = -BulletSpeed;
+                velY = -BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.W || keyNoModifiers == Key.W.WithShift)
+            {
+                // Up - fire from top center
+                startX = _player.X + 0.5; // Center of player width
+                startY = _player.Y;
+                velY = -BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.E || keyNoModifiers == Key.E.WithShift)
+            {
+                // Diagonal right/up - fire from top-right corner
+                startX = _player.X + (PlayerWidth - 1); // Right column
+                startY = _player.Y;
+                velX = BulletSpeed;
+                velY = -BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.A || keyNoModifiers == Key.A.WithShift)
+            {
+                // Left - fire from left center
+                startX = _player.X;
+                startY = _player.Y + 1.0;
+                velX = -BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.D || keyNoModifiers == Key.D.WithShift)
+            {
+                // Right - fire from right center
+                startX = _player.X + (PlayerWidth - 1); // Right column
+                startY = _player.Y + 1.0; // Middle row
+                velX = BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.Z || keyNoModifiers == Key.Z.WithShift)
+            {
+                // Diagonal left/down - fire from bottom-left corner
+                startX = _player.X;
+                startY = _player.Y + (PlayerHeight - 1); // Bottom row
+                velX = -BulletSpeed;
+                velY = BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.X || keyNoModifiers == Key.X.WithShift)
+            {
+                // Down - fire from bottom center
+                startX = _player.X + 0.5; // Center of player width
+                startY = _player.Y + (PlayerHeight - 1); // Bottom row
+                velY = BulletSpeed;
+                shouldFire = true;
+            }
+            else if (keyNoModifiers == Key.C || keyNoModifiers == Key.C.WithShift)
+            {
+                // Diagonal right/down - fire from bottom-right corner
+                startX = _player.X + (PlayerWidth - 1); // Right column
+                startY = _player.Y + (PlayerHeight - 1); // Bottom row
+                velX = BulletSpeed;
+                velY = BulletSpeed;
+                shouldFire = true;
             }
 
             if (shouldFire && (velX != 0 || velY != 0))

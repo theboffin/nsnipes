@@ -5,7 +5,7 @@ namespace NSnipes;
 public class GameConfig
 {
     public string Initials { get; set; } = "AA";
-    public string ServerAddress { get; set; } = "localhost";
+    public string ServerAddress { get; set; } = "127.0.0.1";
     public int ServerPort { get; set; } = 5000;
     
     private static readonly string ConfigFilePath = "nsnipes.json";

@@ -48,7 +48,8 @@ app.MapGrpcService<GameServiceImplementation>();
 // Note: Health check endpoint removed because HTTP/2 only doesn't support HTTP/1.1 GET requests
 // gRPC has built-in health checking via the gRPC health service if needed
 
-app.Logger.LogInformation("NSnipes gRPC Server starting on http://0.0.0.0:{Port}", port);
+app.Logger.LogInformation("NSnipes gRPC Server starting on http://0.0.0.0:{Port} (listening on all interfaces)", port);
+app.Logger.LogInformation("Clients should connect to: http://127.0.0.1:{Port} or http://localhost:{Port}", port, port);
 app.Logger.LogInformation("To use a different port, set the PORT environment variable or update appsettings.json");
 
 try

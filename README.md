@@ -38,7 +38,7 @@ The multiplayer game requires a gRPC server to be running. Start it first:
 .\run-server.ps1 -build
 ```
 
-The server will start on `http://localhost:5000` by default. You can configure the server address in the client code if needed.
+The server will start on `http://0.0.0.0:5000` by default (listening on all network interfaces). **Note**: While the server binds to `0.0.0.0`, clients should connect to `http://127.0.0.1:5000` or `http://localhost:5000` (not `0.0.0.0`). The default client configuration uses `127.0.0.1:5000`. You can configure the server address and port in the client via the "Configure Server" menu option.
 
 ### Starting the Game Client
 
@@ -85,7 +85,7 @@ Use the provided scripts to run the game:
 
 **Prerequisites:**
 - The gRPC server must be running (see "Starting the gRPC Server" above)
-- All players must be able to connect to the same server (default: `localhost:5000`)
+- All players must be able to connect to the same server (default: `127.0.0.1:5000` or `localhost:5000`)
 
 **To Host a Multiplayer Game:**
 
@@ -161,6 +161,16 @@ So what's left to do:
   - ✅ Upgrade to .NET 10 (completed for both NSnipes and NSnipes.GrpcServer)
   - ⚠️ Fix global [ESC] key handling across all screens
   - ⚠️ Extensive testing needed for multiplayer stability
+
+## TO-DO
+
+**Note**: Single Player game play is fairly complete at the moment.
+
+- gRPC game play still not complete
+- Game play needs to move from NSnipes application into a common library that NSnipes consumes and so does the server.  This will allow single player to be performant, but allow multiplayer to be controlled directly by the server, instead of the player who starts a game - that way all players can correctly sync with where every snipe and player is, and each players bullets - I suspect bullet rates may need to be a little lower for multiplayer.
+- need more actual game play to test level-ups
+- need more game play to test multiplayer game over and the experience for all players
+- need to test multiplayer across a wider network and the internet -- suspect at the moment, it'll fail miserably.
 
 
 
@@ -339,6 +349,13 @@ So what's left to do:
 
 ## Recent Changes
 
+### gRPC Server Address Configuration (Latest)
+- **Server Address Default**: Changed default client server address from `localhost` to `127.0.0.1` for clarity
+- **Server Binding**: Server correctly binds to `0.0.0.0:5000` (listening on all network interfaces) - this is correct for server operation
+- **Client Connection**: Clients should connect to `127.0.0.1:5000` or `localhost:5000` (not `0.0.0.0:5000`)
+- **Server Logging**: Server log messages now clarify that clients should connect to `127.0.0.1:5000` or `localhost:5000`
+- **Default Configuration**: Both `GameConfig` and `GrpcGameClient` now default to `127.0.0.1:5000`
+
 ### Input Screen Improvements (Latest)
 - **Starting Level Input Screen**: Improved user experience for level selection
   - Changed all backgrounds from blue to black (matches main game aesthetic)
@@ -420,7 +437,7 @@ So what's left to do:
 - **Server Configuration Menu**: Added "Configure Server" option to intro screen menu
   - Allows players to set custom gRPC server address and port
   - Configuration saved to `nsnipes.json` and persists between sessions
-  - Defaults to `localhost:5000` if not configured
+  - Defaults to `127.0.0.1:5000` if not configured
 - **Server Status Display**: Real-time server connectivity status on intro screen
   - Green indicator when server is online and reachable
   - Red indicator when server is offline or unreachable
@@ -455,7 +472,7 @@ So what's left to do:
   - **Client Architecture**: `GrpcGameClient` replaces `MqttGameClient` with bidirectional streaming
   - **Protocol Buffers**: All game messages defined in `game.proto` for efficient binary serialization
 - **Server Scripts**: Added `run-server.sh` and `run-server.ps1` for easy server startup
-  - Default server address: `http://localhost:5000`
+  - Default server address: `http://127.0.0.1:5000` (clients connect to `127.0.0.1:5000`, server binds to `0.0.0.0:5000`)
   - Same `-build` flag support as client scripts
 - **Improved Latency**: gRPC's binary protocol and HTTP/2 provide significantly lower latency than MQTT
 - **Type Safety**: Protocol buffers provide compile-time type checking for all game messages
@@ -605,7 +622,9 @@ So what's left to do:
 
 ## What Works
 
-### Core Gameplay
+### Core Gameplay (Single Player)
+**Note**: Single Player game play is fairly complete at the moment.
+
 ✅ Player movement (8 directions with smooth continuous movement)  
 ✅ Wall collision detection (prevents player from walking through walls)  
 ✅ Bullet firing and movement (8 directions)  
@@ -672,7 +691,7 @@ So what's left to do:
 - Game automatically starts after join window expires or max players reached
 
 **Network Architecture**
-- **gRPC-based networking** using dedicated server (default: `localhost:5000`)
+- **gRPC-based networking** using dedicated server (default: `127.0.0.1:5000` for clients, server binds to `0.0.0.0:5000`)
 - **Server Management**: gRPC server manages game rooms, player connections, and message routing
 - **Bidirectional Streaming**: Real-time game messages flow through persistent HTTP/2 connections
 - **Protocol Buffers**: Efficient binary serialization for all game messages

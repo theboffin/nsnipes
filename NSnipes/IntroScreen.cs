@@ -500,7 +500,8 @@ public class IntroScreen : View
         if (_waitingForPlayers)
         {
             // During wait, allow Escape to cancel
-            if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+            // Use Key.Esc for proper Escape key detection
+            if (key == Key.Esc)
             {
                 _waitingForPlayers = false;
                 _enteringPlayerCount = false;
@@ -606,7 +607,8 @@ public class IntroScreen : View
         }
         
         // Handle Escape to cancel
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
         {
             _enteringInitials = false;
             _initialsInput = "";
@@ -673,19 +675,23 @@ public class IntroScreen : View
             return;
         }
         
-        // Handle Escape to cancel
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+        // Handle Escape to return to menu
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
         {
             _enteringStartingLevel = false;
             _startingLevelInput = "1";
             _startingLevelInputModified = false;
             _selectedStartingLevel = 1;
+            _showMenu = true; // Return to menu
             // Resume demo if past animation phase
             double elapsedSeconds = (DateTime.Now - _bannerStartTime).TotalSeconds;
             if (elapsedSeconds >= 2.0)
             {
                 _demoActive = true;
             }
+            // Trigger immediate redraw to show menu
+            SetNeedsDraw();
             return;
         }
         
@@ -757,8 +763,9 @@ public class IntroScreen : View
             return;
         }
         
-        // Handle Escape to cancel
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+        // Handle Escape to go back to level selection
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
         {
             _enteringPlayerCount = false;
             _playerCountInput = "1";
@@ -768,6 +775,8 @@ public class IntroScreen : View
             _startingLevelInput = _selectedStartingLevel.ToString();
             _startingLevelInputModified = true; // User already selected a level
             // Demo stays paused during input
+            // Trigger immediate redraw to show level input screen
+            SetNeedsDraw();
             return;
         }
         
@@ -835,7 +844,8 @@ public class IntroScreen : View
         }
         
         // Handle Escape to cancel
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
         {
             _enteringGameId = false;
             _gameIdInput = "";
@@ -1044,20 +1054,9 @@ public class IntroScreen : View
             {
                 if (_enteringInitials)
                 {
-                    // Show input field with caret
+                    // Show input field - will be drawn with faux cursor below
                     menuText = "Initials ";
-                    if (_initialsInput.Length == 0)
-                    {
-                        initialsPart = "▊_"; // Caret at first position
-                    }
-                    else if (_initialsInput.Length == 1)
-                    {
-                        initialsPart = $"{_initialsInput}▊"; // Caret at second position
-                    }
-                    else
-                    {
-                        initialsPart = _initialsInput; // Both characters entered, no caret
-                    }
+                    initialsPart = _initialsInput; // Store current input for drawing below
                 }
                 else
                 {
@@ -1115,26 +1114,73 @@ public class IntroScreen : View
             {
                 if (_enteringInitials)
                 {
-                    // Draw initials input with purple for typed letters
-                    foreach (char c in initialsPart)
+                    // Draw initials input with flashing block cursor (same as other inputs)
+                    // Cursor position is at the current input length (where next character will be typed)
+                    int cursorPos = _initialsInput.Length;
+                    bool showCursor = DateTime.Now.Millisecond < 500; // Flash: show when < 500ms, hide when >= 500ms
+                    
+                    // Draw up to 2 characters with cursor
+                    for (int charIdx = 0; charIdx < 2; charIdx++)
                     {
-                        if (c == '▊')
+                        if (charIdx < _initialsInput.Length)
                         {
-                            // Caret - use current selection color
-                            this.AddChar(c);
-                        }
-                        else if (c == '_')
-                        {
-                            // Placeholder - use current selection color
-                            this.AddChar(c);
+                            // We have a character at this position
+                            if (charIdx == cursorPos && showCursor)
+                            {
+                                // Cursor is visible: when menu is selected, use black block with white character
+                                // When not selected, use white block with black character (like other inputs)
+                                if (i == _selectedMenuIndex)
+                                {
+                                    // Selected menu: black block with white character
+                                    SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+                                }
+                                else
+                                {
+                                    // Not selected: white block with black character
+                                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                                }
+                                this.AddChar(_initialsInput[charIdx]);
+                                // Reset to menu color
+                                SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            }
+                            else
+                            {
+                                // Normal display: magenta character on menu background
+                                SetAttribute(new DrawingAttribute(Color.Magenta, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                                this.AddChar(_initialsInput[charIdx]);
+                                // Reset to menu color
+                                SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            }
                         }
                         else
                         {
-                            // Typed letter - use purple
-                            SetAttribute(new DrawingAttribute(Color.Magenta, i == _selectedMenuIndex ? Color.White : Color.Blue));
-                            this.AddChar(c);
-                            // Reset to menu color
-                            SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            // Empty position - show placeholder or cursor
+                            if (charIdx == cursorPos && showCursor)
+                            {
+                                // Cursor is visible: when menu is selected, use black block with white underscore
+                                // When not selected, use white block with black underscore
+                                if (i == _selectedMenuIndex)
+                                {
+                                    // Selected menu: black block with white underscore
+                                    SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+                                }
+                                else
+                                {
+                                    // Not selected: white block with black underscore
+                                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                                }
+                                this.AddChar('_');
+                                // Reset to menu color
+                                SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            }
+                            else
+                            {
+                                // Normal placeholder: gray underscore on menu background
+                                SetAttribute(new DrawingAttribute(Color.Gray, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                                this.AddChar('_');
+                                // Reset to menu color
+                                SetAttribute(new DrawingAttribute(i == _selectedMenuIndex ? Color.Blue : Color.White, i == _selectedMenuIndex ? Color.White : Color.Blue));
+                            }
                         }
                     }
                 }
@@ -1762,8 +1808,8 @@ public class IntroScreen : View
         if (!IsInitialized)
             return;
         
-        // Fill screen with blue background
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Fill screen with black background (matches main game)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
             Move(0, y);
@@ -1775,36 +1821,59 @@ public class IntroScreen : View
         int promptX = (width - prompt.Length) / 2;
         int promptY = height / 2 - 2;
         
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(promptX, promptY);
         this.AddString(prompt);
         
-        // Draw input with caret
-        string inputDisplay = _gameIdInput.PadRight(6, '_');
-        if (_gameIdInput.Length < 6)
-        {
-            inputDisplay = $"{_gameIdInput}▊{new string('_', 5 - _gameIdInput.Length)}";
-        }
-        int inputX = (width - inputDisplay.Length) / 2;
+        // Draw input with flashing block cursor (same as level select)
+        // Display up to 6 characters, with cursor at the current input position
+        int inputX = (width - 6) / 2; // Center 6-character input
         int inputY = promptY + 2;
         
-        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
-        Move(inputX, inputY);
-        foreach (char c in inputDisplay)
+        // Cursor position is at the current input length (where next character will be typed)
+        int cursorPos = _gameIdInput.Length;
+        bool showCursor = DateTime.Now.Millisecond < 500; // Flash: show when < 500ms, hide when >= 500ms
+        
+        // Draw all 6 positions (filled characters or placeholders)
+        for (int i = 0; i < 6; i++)
         {
-            if (c == '▊')
+            int charX = inputX + i;
+            if (charX >= 0 && charX < width && inputY >= 0 && inputY < height)
             {
-                this.AddChar(c);
-            }
-            else if (c == '_')
-            {
-                SetAttribute(new DrawingAttribute(Color.Gray, Color.Blue));
-                this.AddChar(c);
-                SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
-            }
-            else
-            {
-                this.AddChar(c);
+                Move(charX, inputY);
+                
+                if (i < _gameIdInput.Length)
+                {
+                    // We have a character at this position
+                    if (i == cursorPos && showCursor)
+                    {
+                        // Cursor is visible: draw white block with black character
+                        SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                        this.AddChar(_gameIdInput[i]);
+                    }
+                    else
+                    {
+                        // Normal display: magenta character on black background
+                        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Black));
+                        this.AddChar(_gameIdInput[i]);
+                    }
+                }
+                else
+                {
+                    // Empty position - show placeholder or cursor
+                    if (i == cursorPos && showCursor)
+                    {
+                        // Cursor is visible: draw white block with space (or placeholder character)
+                        SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                        this.AddChar('_');
+                    }
+                    else
+                    {
+                        // Normal placeholder: gray underscore on black background
+                        SetAttribute(new DrawingAttribute(Color.Gray, Color.Black));
+                        this.AddChar('_');
+                    }
+                }
             }
         }
         
@@ -1812,7 +1881,7 @@ public class IntroScreen : View
         string instructions = "Press ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = inputY + 2;
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(instX, instY);
         this.AddString(instructions);
     }
@@ -1930,7 +1999,8 @@ public class IntroScreen : View
         }
         
         // Handle Escape to cancel
-        if (keyStr.Contains("Esc") || keyStr.Contains("Escape"))
+        // Use Key.Esc for proper Escape key detection
+        if (key == Key.Esc)
         {
             _enteringServerConfig = false;
             _serverAddressInput = "";
@@ -2015,8 +2085,8 @@ public class IntroScreen : View
         if (!IsInitialized)
             return;
         
-        // Fill screen with blue background
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Fill screen with black background (matches main game)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
             Move(0, y);
@@ -2027,7 +2097,7 @@ public class IntroScreen : View
         string title = "Configure Server";
         int titleX = (width - title.Length) / 2;
         int titleY = height / 2 - 4;
-        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
         Move(titleX, titleY);
         this.AddString(title);
         
@@ -2035,47 +2105,137 @@ public class IntroScreen : View
         string addressPrompt = "Server Address:";
         int addressPromptX = (width - 50) / 2;
         int addressPromptY = titleY + 2;
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(addressPromptX, addressPromptY);
         this.AddString(addressPrompt);
         
-        // Draw address input
+        // Draw address input with flashing block cursor
         string addressDisplay = _serverAddressInput.Length > 0 ? _serverAddressInput : _config.ServerAddress;
         int addressInputX = addressPromptX;
         int addressInputY = addressPromptY + 1;
-        SetAttribute(new DrawingAttribute(_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
-        Move(addressInputX, addressInputY);
-        this.AddString(addressDisplay);
-        if (_editingServerAddress && _serverAddressInput.Length == 0)
+        
+        // Cursor position is at the current input length (where next character will be typed)
+        // Only show cursor if we're editing the address field
+        int addressCursorPos = _editingServerAddress ? _serverAddressInput.Length : -1;
+        bool showAddressCursor = _editingServerAddress && DateTime.Now.Millisecond < 500; // Flash: show when < 500ms, hide when >= 500ms
+        
+        // Draw address input character by character
+        for (int i = 0; i < addressDisplay.Length; i++)
         {
-            this.AddChar('▊');
+            int charX = addressInputX + i;
+            if (charX >= 0 && charX < width && addressInputY >= 0 && addressInputY < height)
+            {
+                Move(charX, addressInputY);
+                
+                // Check if this is the cursor position (only if we have input and this is the last character)
+                if (_editingServerAddress && i == addressCursorPos && showAddressCursor && _serverAddressInput.Length > 0)
+                {
+                    // Cursor is visible: draw white block with black character
+                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                    this.AddChar(addressDisplay[i]);
+                }
+                else
+                {
+                    // Normal display: magenta character on black background (if editing) or gray (if not editing)
+                    SetAttribute(new DrawingAttribute(_editingServerAddress ? Color.Magenta : Color.Gray, Color.Black));
+                    this.AddChar(addressDisplay[i]);
+                }
+            }
+        }
+        
+        // If editing address and input is empty or cursor is at the end, show cursor/placeholder
+        if (_editingServerAddress)
+        {
+            int cursorX = addressInputX + addressCursorPos;
+            if (cursorX >= 0 && cursorX < width && addressInputY >= 0 && addressInputY < height)
+            {
+                Move(cursorX, addressInputY);
+                
+                if (showAddressCursor)
+                {
+                    // Cursor is visible: draw white block with underscore
+                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                    this.AddChar('_');
+                }
+                else if (_serverAddressInput.Length == 0)
+                {
+                    // Show placeholder when cursor is hidden and input is empty
+                    SetAttribute(new DrawingAttribute(Color.Gray, Color.Black));
+                    this.AddChar('_');
+                }
+            }
         }
         
         // Draw port prompt
         string portPrompt = "Server Port:";
         int portPromptX = addressPromptX;
         int portPromptY = addressInputY + 2;
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(portPromptX, portPromptY);
         this.AddString(portPrompt);
         
-        // Draw port input
+        // Draw port input with flashing block cursor
         string portDisplay = _serverPortInput.Length > 0 ? _serverPortInput : _config.ServerPort.ToString();
         int portInputX = portPromptX;
         int portInputY = portPromptY + 1;
-        SetAttribute(new DrawingAttribute(!_editingServerAddress ? Color.Magenta : Color.Gray, Color.Blue));
-        Move(portInputX, portInputY);
-        this.AddString(portDisplay);
-        if (!_editingServerAddress && _serverPortInput.Length == 0)
+        
+        // Cursor position is at the current input length (where next character will be typed)
+        // Only show cursor if we're editing the port field
+        int portCursorPos = !_editingServerAddress ? _serverPortInput.Length : -1;
+        bool showPortCursor = !_editingServerAddress && DateTime.Now.Millisecond < 500; // Flash: show when < 500ms, hide when >= 500ms
+        
+        // Draw port input character by character
+        for (int i = 0; i < portDisplay.Length; i++)
         {
-            this.AddChar('▊');
+            int charX = portInputX + i;
+            if (charX >= 0 && charX < width && portInputY >= 0 && portInputY < height)
+            {
+                Move(charX, portInputY);
+                
+                // Check if this is the cursor position (only if we have input and this is the last character)
+                if (!_editingServerAddress && i == portCursorPos && showPortCursor && _serverPortInput.Length > 0)
+                {
+                    // Cursor is visible: draw white block with black character
+                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                    this.AddChar(portDisplay[i]);
+                }
+                else
+                {
+                    // Normal display: magenta character on black background (if editing) or gray (if not editing)
+                    SetAttribute(new DrawingAttribute(!_editingServerAddress ? Color.Magenta : Color.Gray, Color.Black));
+                    this.AddChar(portDisplay[i]);
+                }
+            }
+        }
+        
+        // If editing port and input is empty or cursor is at the end, show cursor/placeholder
+        if (!_editingServerAddress)
+        {
+            int cursorX = portInputX + portCursorPos;
+            if (cursorX >= 0 && cursorX < width && portInputY >= 0 && portInputY < height)
+            {
+                Move(cursorX, portInputY);
+                
+                if (showPortCursor)
+                {
+                    // Cursor is visible: draw white block with underscore
+                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                    this.AddChar('_');
+                }
+                else if (_serverPortInput.Length == 0)
+                {
+                    // Show placeholder when cursor is hidden and input is empty
+                    SetAttribute(new DrawingAttribute(Color.Gray, Color.Black));
+                    this.AddChar('_');
+                }
+            }
         }
         
         // Draw instructions
         string instructions = "Press TAB to switch fields, ENTER to confirm, ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = portInputY + 2;
-        SetAttribute(new DrawingAttribute(Color.Gray, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(instX, instY);
         this.AddString(instructions);
     }
