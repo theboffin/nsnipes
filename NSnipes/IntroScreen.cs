@@ -59,10 +59,12 @@ public class IntroScreen : View
     private bool _enteringStartingLevel = false;
     private string _startingLevelInput = "1";
     private int _selectedStartingLevel = 1;
+    private bool _startingLevelInputModified = false; // Track if user has typed anything
     
     // Multiplayer state
     private bool _enteringPlayerCount = false;
     private string _playerCountInput = "1";
+    private bool _playerCountInputModified = false; // Track if user has typed anything
     private bool _enteringGameId = false;
     private string _gameIdInput = "";
     private bool _waitingForPlayers = false;
@@ -328,8 +330,8 @@ public class IntroScreen : View
             return true;
         }
         
-        // Fill screen with blue background
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Fill screen with black background (game-style)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
             Move(0, y);
@@ -561,6 +563,7 @@ public class IntroScreen : View
                 // First prompt for starting level
                 _enteringStartingLevel = true;
                 _startingLevelInput = "1";
+                _startingLevelInputModified = false;
                 _selectedStartingLevel = 1;
                 break;
                 
@@ -660,6 +663,12 @@ public class IntroScreen : View
             {
                 // Use range operator instead of Substring to avoid allocation
                 _startingLevelInput = _startingLevelInput[..^1];
+                // If we deleted everything, reset to default
+                if (string.IsNullOrEmpty(_startingLevelInput))
+                {
+                    _startingLevelInput = "1";
+                    _startingLevelInputModified = false;
+                }
             }
             return;
         }
@@ -669,6 +678,7 @@ public class IntroScreen : View
         {
             _enteringStartingLevel = false;
             _startingLevelInput = "1";
+            _startingLevelInputModified = false;
             _selectedStartingLevel = 1;
             // Resume demo if past animation phase
             double elapsedSeconds = (DateTime.Now - _bannerStartTime).TotalSeconds;
@@ -682,13 +692,21 @@ public class IntroScreen : View
         // Handle Enter to confirm
         if (keyStr.Contains("Enter"))
         {
+            // If input is empty, use default value of 1
+            if (string.IsNullOrEmpty(_startingLevelInput))
+            {
+                _startingLevelInput = "1";
+            }
+            
             if (int.TryParse(_startingLevelInput, out int level) && level >= 1 && level <= 50)
             {
                 _selectedStartingLevel = level;
                 _enteringStartingLevel = false;
+                _startingLevelInputModified = false;
                 // Now prompt for player count
                 _enteringPlayerCount = true;
                 _playerCountInput = "1";
+                _playerCountInputModified = false;
                 // Demo stays paused during player count input
             }
             return;
@@ -701,9 +719,17 @@ public class IntroScreen : View
             // Only allow digits
             if (ch.Value >= '0' && ch.Value <= '9')
             {
-                // Limit to 2 digits (max level 50)
-                if (_startingLevelInput.Length < 2)
+                // If this is the first character typed, replace the default "1"
+                // Otherwise, append if we have room (max 2 digits for level 50)
+                if (!_startingLevelInputModified)
                 {
+                    // First character - replace default
+                    _startingLevelInput = ch.Value.ToString();
+                    _startingLevelInputModified = true;
+                }
+                else if (_startingLevelInput.Length < 2)
+                {
+                    // Append if we have room
                     _startingLevelInput += ch.Value;
                 }
             }
@@ -721,6 +747,12 @@ public class IntroScreen : View
             {
                 // Use range operator instead of Substring to avoid allocation
                 _playerCountInput = _playerCountInput[..^1];
+                // If we deleted everything, reset to default
+                if (string.IsNullOrEmpty(_playerCountInput))
+                {
+                    _playerCountInput = "1";
+                    _playerCountInputModified = false;
+                }
             }
             return;
         }
@@ -730,9 +762,11 @@ public class IntroScreen : View
         {
             _enteringPlayerCount = false;
             _playerCountInput = "1";
+            _playerCountInputModified = false;
             // Go back to level selection
             _enteringStartingLevel = true;
             _startingLevelInput = _selectedStartingLevel.ToString();
+            _startingLevelInputModified = true; // User already selected a level
             // Demo stays paused during input
             return;
         }
@@ -740,6 +774,12 @@ public class IntroScreen : View
         // Handle Enter to confirm
         if (keyStr.Contains("Enter"))
         {
+            // If input is empty, use default value of 1
+            if (string.IsNullOrEmpty(_playerCountInput))
+            {
+                _playerCountInput = "1";
+            }
+            
             if (int.TryParse(_playerCountInput, out int count) && count >= 1 && count <= 5)
             {
                 _maxPlayers = count;
@@ -759,13 +799,17 @@ public class IntroScreen : View
         // Validate character (0-9)
         if (ch >= '0' && ch <= '9')
         {
-            if (_playerCountInput.Length < 1)
+            // If this is the first character typed, replace the default "1"
+            // Otherwise, append if we have room and it's valid (max 5 players)
+            if (!_playerCountInputModified)
             {
+                // First character - replace default
                 _playerCountInput = ch.Value.ToString();
+                _playerCountInputModified = true;
             }
             else if (_playerCountInput.Length == 1)
             {
-                // Avoid string concatenation - use string interpolation
+                // Append second digit if valid
                 string newInput = $"{_playerCountInput}{ch.Value}";
                 if (int.TryParse(newInput, out int count) && count >= 1 && count <= 5)
                 {
@@ -948,7 +992,23 @@ public class IntroScreen : View
         int boxY = menuStartY;
         int padding = 2; // Padding from box borders
         
-        // Draw box border (using single-line characters)
+        // First, fill entire menu interior with blue background
+        int menuItemCount = _menuItems.Length + 2; // +2 for gaps after Initials and Configure Server
+        int menuBottomY = boxY + menuItemCount + 1;
+        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        for (int y = boxY + 1; y <= menuBottomY; y++)
+        {
+            for (int x = boxX + 1; x < boxX + boxWidth - 1; x++)
+            {
+                if (x >= 0 && x < width && y >= 0 && y < height)
+                {
+                    Move(x, y);
+                    this.AddChar(' ');
+                }
+            }
+        }
+        
+        // Draw box border (using single-line characters) on blue background
         SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         
         // Top border with title
@@ -972,10 +1032,7 @@ public class IntroScreen : View
         Move(boxX + boxWidth - 1, boxY);
         this.AddChar('┐');
         
-        // Calculate actual menu items (with gaps after Initials and Configure Server)
-        int menuItemCount = _menuItems.Length + 2; // +2 for gaps after Initials and Configure Server
-        
-        // Draw menu items
+        // Draw menu items (menu interior already filled with blue)
         int itemIndex = 0;
         for (int i = 0; i < _menuItems.Length; i++)
         {
@@ -1112,7 +1169,7 @@ public class IntroScreen : View
         }
         
         // Bottom border (after all menu items)
-        int bottomY = boxY + menuItemCount + 1;
+        int bottomY = menuBottomY; // Use the same value calculated above
         SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         Move(boxX, bottomY);
         this.AddChar('└');
@@ -1123,6 +1180,39 @@ public class IntroScreen : View
         }
         Move(boxX + boxWidth - 1, bottomY);
         this.AddChar('┘');
+        
+        // Faux drop shadow: right and bottom edges using grey block characters
+        // Right shadow: vertical bar of solid blocks on the right side of menu
+        int rightShadowX = boxX + boxWidth;
+        if (rightShadowX < width)
+        {
+            SetAttribute(new DrawingAttribute(Color.Gray, Color.Black));
+            for (int y = boxY + 1; y <= bottomY; y++)
+            {
+                if (y >= 0 && y < height)
+                {
+                    Move(rightShadowX, y);
+                    this.AddChar('█'); // solid block
+                }
+            }
+        }
+        
+        // Bottom shadow: half-blocks extending from menu to match vertical shadow position
+        // Swap foreground/background colors to show the correct half
+        int shadowY = bottomY + 1;
+        if (shadowY < height)
+        {
+            SetAttribute(new DrawingAttribute(Color.Black, Color.Gray)); // Swapped: Black foreground, Gray background
+            // Extend from menu left edge to right shadow position
+            for (int x = boxX + 1; x <= rightShadowX && x < width; x++)
+            {
+                if (x >= 0)
+                {
+                    Move(x, shadowY);
+                    this.AddChar('▄'); // lower half-block
+                }
+            }
+        }
         
         // Draw server status at the bottom of the screen
         DrawServerStatus(width, height);
@@ -1169,7 +1259,16 @@ public class IntroScreen : View
         int statusY = height - 2;
         int statusX = (width - statusText.Length) / 2;
         
-        SetAttribute(new DrawingAttribute(statusColor, Color.Blue));
+        // Clear area behind status text to black
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+        for (int x = statusX; x < statusX + statusText.Length && x < width; x++)
+        {
+            Move(x, statusY);
+            this.AddChar(' ');
+        }
+        
+        // Draw status text on black background
+        SetAttribute(new DrawingAttribute(statusColor, Color.Black));
         Move(statusX, statusY);
         this.AddString(statusText);
     }
@@ -1263,10 +1362,10 @@ public class IntroScreen : View
         if (!IsInitialized)
             return;
         
-        // Clear previous position if it was on screen and different from current
+        // Clear previous position if it was on screen and different from current (use black background)
         if (_introPlayerPrevX != _introPlayerX && _introPlayerPrevX >= 0 && _introPlayerPrevX < width)
         {
-            SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
             // Clear the 2x3 player area
             for (int row = 0; row < 3; row++)
             {
@@ -1295,8 +1394,8 @@ public class IntroScreen : View
         var eyes = now.Millisecond < 500 ? "ÔÔ" : "OO";
         var mouth = now.Millisecond < 500 ? "◄►" : "◂▸";
         
-        // Draw player at intro position
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Draw player at intro position (on black background)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         
         // Draw eyes
         if (_introPlayerX >= 0 && _introPlayerX + 1 < width && _introPlayerY >= 0 && _introPlayerY < height)
@@ -1324,12 +1423,26 @@ public class IntroScreen : View
     {
         if (!IsInitialized)
             return;
-            
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
         
-        // Banner is 7 rows tall, with 1 blank row above and below
-        // Position banner higher up (about 1/3 from top) to leave room for menu below
-        int bannerStartY = screenHeight / 4; // 1/4 from top instead of center
+        // Calculate banner area bounds for clearing
+        int bannerStartY = screenHeight / 4;
+        int bannerWidth = 7 * 7 + 6 * 2; // 7 letters (7 cols each) + 6 gaps (2 cols each)
+        int bannerEndX = startX + bannerWidth;
+        int bannerEndY = bannerStartY + 1 + 7; // +1 for blank row above, +7 for banner height
+        
+        // First, clear the banner area to black to remove any blue remnants
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+        for (int y = bannerStartY; y <= bannerEndY && y < screenHeight; y++)
+        {
+            for (int x = Math.Max(0, startX - 2); x < Math.Min(Frame.Width, bannerEndX + 2); x++)
+            {
+                Move(x, y);
+                this.AddChar(' ');
+            }
+        }
+        
+        // Now draw banner letters on black background (banner characters are blue, background is black)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         
         // Draw each letter of NSNIPES with 2-column gaps between letters
         string[][] letters = { BannerN, BannerS, BannerN, BannerI, BannerP, BannerE, BannerS };
@@ -1352,6 +1465,18 @@ public class IntroScreen : View
                         if (x >= 0 && x < Frame.Width)
                         {
                             Move(x, y);
+                            // Banner characters are white (the block characters themselves)
+                            // Background should be black
+                            if (letter[row][col] != ' ')
+                            {
+                                // Draw white character on black background
+                                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+                            }
+                            else
+                            {
+                                // Space - use black background
+                                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+                            }
                             this.AddChar(letter[row][col]);
                         }
                     }
@@ -1511,8 +1636,8 @@ public class IntroScreen : View
         if (!IsInitialized)
             return;
         
-        // Fill screen with blue background
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Fill screen with black background (matches main game)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
             Move(0, y);
@@ -1524,24 +1649,47 @@ public class IntroScreen : View
         int promptX = (width - prompt.Length) / 2;
         int promptY = height / 2 - 2;
         
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(promptX, promptY);
         this.AddString(prompt);
         
-        // Draw input with caret - use string interpolation instead of concatenation
-        string inputDisplay = $"{_startingLevelInput}▊";
-        int inputX = (width - inputDisplay.Length) / 2;
+        // Draw input - show current input value (defaults to "1" if empty)
+        string displayValue = string.IsNullOrEmpty(_startingLevelInput) ? "1" : _startingLevelInput;
+        int inputX = (width - displayValue.Length) / 2;
         int inputY = promptY + 2;
         
-        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
-        Move(inputX, inputY);
-        this.AddString(inputDisplay);
+        // Draw the input value character by character, with flashing block cursor over the last digit
+        // Cursor position is at the last character (or first position if empty/default)
+        int cursorPos = displayValue.Length > 0 ? displayValue.Length - 1 : 0;
+        bool showCursor = DateTime.Now.Millisecond < 500; // Flash: show when < 500ms, hide when >= 500ms
+        
+        for (int i = 0; i < displayValue.Length; i++)
+        {
+            int charX = inputX + i;
+            if (charX >= 0 && charX < width && inputY >= 0 && inputY < height)
+            {
+                Move(charX, inputY);
+                
+                if (i == cursorPos && showCursor)
+                {
+                    // Cursor is visible: draw white block with black digit
+                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                    this.AddChar(displayValue[i]);
+                }
+                else
+                {
+                    // Normal display: magenta digit on black background
+                    SetAttribute(new DrawingAttribute(Color.Magenta, Color.Black));
+                    this.AddChar(displayValue[i]);
+                }
+            }
+        }
         
         // Draw instructions
         string instructions = "Press ENTER to confirm, ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = inputY + 2;
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(instX, instY);
         this.AddString(instructions);
     }
@@ -1551,8 +1699,8 @@ public class IntroScreen : View
         if (!IsInitialized)
             return;
         
-        // Fill screen with blue background
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        // Fill screen with black background (matches main game)
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         for (int y = 0; y < height; y++)
         {
             Move(0, y);
@@ -1564,24 +1712,47 @@ public class IntroScreen : View
         int promptX = (width - prompt.Length) / 2;
         int promptY = height / 2 - 2;
         
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(promptX, promptY);
         this.AddString(prompt);
         
-        // Draw input with caret - use string interpolation instead of concatenation
-        string inputDisplay = $"{_playerCountInput}▊";
-        int inputX = (width - inputDisplay.Length) / 2;
+        // Draw input - show current input value (defaults to "1" if empty)
+        string displayValue = string.IsNullOrEmpty(_playerCountInput) ? "1" : _playerCountInput;
+        int inputX = (width - displayValue.Length) / 2;
         int inputY = promptY + 2;
         
-        SetAttribute(new DrawingAttribute(Color.Magenta, Color.Blue));
-        Move(inputX, inputY);
-        this.AddString(inputDisplay);
+        // Draw the input value character by character, with flashing block cursor over the last digit
+        // Cursor position is at the last character (or first position if empty/default)
+        int cursorPos = displayValue.Length > 0 ? displayValue.Length - 1 : 0;
+        bool showCursor = DateTime.Now.Millisecond < 500; // Flash: show when < 500ms, hide when >= 500ms
+        
+        for (int i = 0; i < displayValue.Length; i++)
+        {
+            int charX = inputX + i;
+            if (charX >= 0 && charX < width && inputY >= 0 && inputY < height)
+            {
+                Move(charX, inputY);
+                
+                if (i == cursorPos && showCursor)
+                {
+                    // Cursor is visible: draw white block with black digit
+                    SetAttribute(new DrawingAttribute(Color.Black, Color.White));
+                    this.AddChar(displayValue[i]);
+                }
+                else
+                {
+                    // Normal display: magenta digit on black background
+                    SetAttribute(new DrawingAttribute(Color.Magenta, Color.Black));
+                    this.AddChar(displayValue[i]);
+                }
+            }
+        }
         
         // Draw instructions
         string instructions = "Press ENTER to confirm, ESC to cancel";
         int instX = (width - instructions.Length) / 2;
         int instY = inputY + 2;
-        SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+        SetAttribute(new DrawingAttribute(Color.White, Color.Black));
         Move(instX, instY);
         this.AddString(instructions);
     }
@@ -2723,11 +2894,11 @@ public class IntroScreen : View
         {
             if (!player.IsAlive) continue;
             
-            // Clear previous position
+            // Clear previous position (use black background to match intro screen)
             if (player.PreviousX >= 0 && player.PreviousX < width &&
                 player.PreviousY >= 0 && player.PreviousY < height)
             {
-                SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                 for (int row = 0; row < 3; row++)
                 {
                     int clearY = (int)player.PreviousY + row;
@@ -2756,7 +2927,8 @@ public class IntroScreen : View
                 var eyes = now.Millisecond < 500 ? "ÔÔ" : "OO";
                 var mouth = now.Millisecond < 500 ? "◄►" : "◂▸";
                 
-                SetAttribute(new DrawingAttribute(player.Color, Color.Blue));
+                // Draw demo players on black background (match game look)
+                SetAttribute(new DrawingAttribute(player.Color, Color.Black));
                 
                 // Draw eyes
                 if (playerX >= 0 && playerX + 1 < width && playerY >= 0 && playerY < height)
@@ -2794,7 +2966,7 @@ public class IntroScreen : View
             if (snipe.PreviousX >= 0 && snipe.PreviousX < width &&
                 snipe.PreviousY >= 0 && snipe.PreviousY < height)
             {
-                SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                 // Clear both positions (arrow and '@')
                 Move(snipe.PreviousX, snipe.PreviousY);
                 this.AddChar(' ');
@@ -2820,7 +2992,7 @@ public class IntroScreen : View
             {
                 // Set color based on snipe type: TypeA = magenta, TypeB = green (matching game)
                 var snipeColor = snipe.Type == SnipeType.TypeA ? Color.Magenta : Color.Green;
-                SetAttribute(new DrawingAttribute(snipeColor, Color.Blue));
+                SetAttribute(new DrawingAttribute(snipeColor, Color.Black));
                 
                 // Draw order depends on direction (matching game):
                 // Moving left: arrow first, then '@'
@@ -2870,7 +3042,7 @@ public class IntroScreen : View
             int prevY = (int)bullet.PreviousY;
             if (prevX >= 0 && prevX < width && prevY >= 0 && prevY < height)
             {
-                SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+                SetAttribute(new DrawingAttribute(Color.White, Color.Black));
                 Move(prevX, prevY);
                 this.AddChar(' ');
             }
@@ -2880,7 +3052,7 @@ public class IntroScreen : View
             int bulletY = (int)bullet.Y;
             if (bulletX >= 0 && bulletX < width && bulletY >= 0 && bulletY < height)
             {
-                SetAttribute(new DrawingAttribute(Color.Red, Color.Blue));
+                SetAttribute(new DrawingAttribute(Color.Red, Color.Black));
                 Move(bulletX, bulletY);
                 this.AddChar('*');
             }

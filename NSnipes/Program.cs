@@ -55,6 +55,8 @@ var game = new Game(app);
 
 try
 {
+    // In Terminal.Gui v2, Window should implement IRunnable
+    // If not, we may need to add it to the application's view hierarchy
     app.Run(game);
 }
 finally

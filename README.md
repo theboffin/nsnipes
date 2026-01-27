@@ -339,6 +339,19 @@ So what's left to do:
 
 ## Recent Changes
 
+### Input Screen Improvements (Latest)
+- **Starting Level Input Screen**: Improved user experience for level selection
+  - Changed all backgrounds from blue to black (matches main game aesthetic)
+  - Cursor positioned over the default '1' digit for easy overtyping
+  - Pressing ENTER accepts the default value (1) if input is empty
+  - Cursor automatically hidden when moving to next screen
+- **Player Count Input Screen**: Improved user experience for player count selection
+  - Changed all backgrounds from blue to black (matches main game aesthetic)
+  - Cursor positioned over the default '1' digit for easy overtyping
+  - Pressing ENTER accepts the default value (1) if input is empty
+  - Cursor automatically hidden when moving on from this screen
+- **Visual Consistency**: Both input screens now use black backgrounds throughout (prompt, input, instructions) for consistency with the main game
+
 ### Intro Screen Demo Animation (Latest)
 - **Interactive Demo Animation**: Added fully functional demo animation to the intro screen
   - Two demo players (BD white, NP yellow) with intelligent movement AI

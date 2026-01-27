@@ -15,9 +15,16 @@ using BulletUpdate = NSnipes.GrpcServer.BulletUpdate;
 
 namespace NSnipes;
 
-public class Game : Window
+public class Game : Window, Terminal.Gui.App.IRunnable
 {
     private readonly IApplication _app;
+    
+    // IRunnable implementation
+    public void Run()
+    {
+        // Window already handles its own lifecycle
+        // This method is called by app.Run()
+    }
     private readonly Map _map;
     private readonly Player _player;
     private int _lastFrameWidth;
@@ -159,9 +166,17 @@ public class Game : Window
         Add(_introScreen);
         
         _introScreen.Show();
-
-        Title = "NSnipes";
-
+        
+        // Remove window border and title
+        Title = ""; // Empty title to hide it
+        
+        // Set Border thickness to zero to remove the border completely
+        // Thickness constructor takes (top, right, bottom, left)
+        if (Border != null)
+        {
+            Border.Thickness = new Thickness(0, 0, 0, 0);
+        }
+        
         // Make window fill entire screen
         X = 0;
         Y = 0;
@@ -170,9 +185,6 @@ public class Game : Window
 
         // Prevent default Escape key behavior (we handle it ourselves)
         CanFocus = true;
-        
-        // Note: Modal and Border properties don't exist in Terminal.Gui v2
-        // ColorScheme is set differently in v2 - using default for now
 
         // Handle keyboard input using IApplication.Keyboard.KeyDown
         _app.Keyboard.KeyDown += (sender, key) =>
