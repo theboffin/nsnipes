@@ -294,6 +294,25 @@ public class GrpcGameClient : IDisposable
         }
     }
     
+    /// <summary>Send player input (move/fire) for server-authoritative multiplayer.</summary>
+    public async Task<bool> SendInputAsync(string gameId, string playerId, int moveDx, int moveDy, int fireDx, int fireDy)
+    {
+        var message = new GameMessage
+        {
+            GameId = gameId,
+            PlayerId = playerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            PlayerInput = new PlayerInput
+            {
+                MoveDx = moveDx,
+                MoveDy = moveDy,
+                FireDx = fireDx,
+                FireDy = fireDy
+            }
+        };
+        return await SendGameMessageAsync(message);
+    }
+
     public async Task<bool> SendGameMessageAsync(GameMessage message)
     {
         if (message == null)
@@ -301,13 +320,13 @@ public class GrpcGameClient : IDisposable
             OnConnectionError?.Invoke("Cannot send message: Message is null");
             return false;
         }
-        
+
         if (_stream == null || !_isConnected)
         {
             OnConnectionError?.Invoke("Cannot send message: Not connected to server");
             return false;
         }
-        
+
         try
         {
             await _stream.RequestStream.WriteAsync(message);
@@ -332,7 +351,7 @@ public class GrpcGameClient : IDisposable
     
     private string GetMessageType(GameMessage message)
     {
-        // Convert gRPC message to topic-like string for compatibility
+        if (message.PlayerInput != null) return "playerInput";
         if (message.Position != null) return "position";
         if (message.Bullet != null) return "bullet";
         if (message.State != null) return "state";

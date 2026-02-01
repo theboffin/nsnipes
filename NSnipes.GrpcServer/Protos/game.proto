@@ -23,24 +23,29 @@ message GameMessage {
   int64 timestamp = 3; // Unix timestamp in milliseconds
   
   oneof message {
-    // Player messages
+    // Client -> Server: player input (move/fire)
+    PlayerInput playerInput = 9;
+    // Player messages (legacy, may be used for compatibility)
     PlayerPositionUpdate position = 10;
     PlayerRespawnMessage respawn = 11;
-    
-    // Bullet messages
     BulletUpdate bullet = 12;
-    
-    // Game state messages (host only)
+    // Server -> Client: authoritative game state
     GameStateSnapshot state = 13;
     SnipeUpdates snipes = 14;
     HiveUpdates hives = 15;
-    
-    // Game control messages
     GameStartMessage gameStart = 16;
     GameOverMessage gameOver = 17;
     PlayerJoinNotification playerJoin = 18;
     PlayerCountUpdate playerCount = 19;
   }
+}
+
+// Client sends input only; server runs simulation
+message PlayerInput {
+  int32 moveDx = 1;
+  int32 moveDy = 2;
+  int32 fireDx = 3;
+  int32 fireDy = 4;
 }
 
 // Game creation and joining
@@ -96,14 +101,24 @@ message BulletUpdate {
   string hitTargetId = 8; // ID of hit target (only for "hit")
 }
 
-// Game state snapshot (host publishes)
+// Game state snapshot (server publishes authoritatively)
 message GameStateSnapshot {
   int32 level = 1;
   string status = 2; // "waiting", "playing", "ended"
   repeated PlayerStateInfo players = 3;
   repeated HiveStateInfo hives = 4;
   repeated SnipeStateInfo snipes = 5;
+  repeated BulletStateInfo bullets = 7;
   int64 sequence = 6;
+}
+
+message BulletStateInfo {
+  string bulletId = 1;
+  double x = 2;
+  double y = 3;
+  double velocityX = 4;
+  double velocityY = 5;
+  string playerId = 6;
 }
 
 message PlayerStateInfo {

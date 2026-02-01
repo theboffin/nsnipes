@@ -34,6 +34,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     private readonly List<Hive> _hives = new List<Hive>(MaxHives);
     private readonly List<Snipe> _snipes = new List<Snipe>(MaxSnipes);
     private readonly GameState _gameState = new GameState();
+    /// <summary>Protects game state collections when updated from network (HandleGameStateSnapshot) while UI thread iterates them in draw methods.</summary>
+    private readonly object _gameStateLock = new object();
     
     // Game configuration constants
     private const int MaxBullets = 10;
@@ -95,6 +97,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     private GameSession? _gameSession;
     private Dictionary<string, PlayerNetwork> _networkPlayers = new Dictionary<string, PlayerNetwork>(MaxNetworkPlayers);
     private bool _isMultiplayer = false;
+    /// <summary>True after we've received at least one GameStateSnapshot that set our position (avoids broken map for joining player).</summary>
+    private bool _hasReceivedMultiplayerSnapshot = false;
     private int _positionSequence = 0; // Sequence number for position updates
     private DateTime _lastPositionPublish = DateTime.Now;
     private const int PositionPublishThrottleMs = 20; // Publish position every 20ms when moved for smoother updates
@@ -150,6 +154,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             }
             _gameSession = null;
             _isMultiplayer = false;
+            _hasReceivedMultiplayerSnapshot = false;
             _networkPlayers.Clear();
         };
         _introScreen.OnStartMultiplayerGame += async (maxPlayers) =>
@@ -305,7 +310,9 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                     }
                 }
                 
-                UpdateBullets();
+                // Server-authoritative: in multiplayer server runs simulation and sends state
+                if (!_isMultiplayer)
+                    UpdateBullets();
                 SetNeedsDraw();
             }
             return true;
@@ -328,12 +335,12 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             // Cache DateTime.Now at start of update cycle
             _currentFrameTime = DateTime.Now;
             
-            if (_isMultiplayer && _gameSession != null && _gameSession.Status == GameSessionStatus.Playing && 
+            if (_isMultiplayer && _gameSession != null && _gameSession.Status == GameSessionStatus.Playing &&
                 _grpcClient != null && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver)
             {
-                // Force position publish by resetting throttle - this ensures position is sent periodically
-                _lastPositionPublish = _currentFrameTime.AddMilliseconds(-PositionPublishThrottleMs * 5); // Reset throttle to allow publish
-                PublishPlayerPosition();
+                // Server-authoritative: send current move input so server can update simulation
+                var (moveDx, moveDy) = CalculateMovementDirection();
+                _ = _grpcClient.SendInputAsync(_gameSession.GameId, _gameSession.PlayerId, moveDx, moveDy, 0, 0);
             }
             return true;
         });
@@ -346,14 +353,13 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             
             if (_mapDrawn && !_introScreen.IsClearingScreen && !_introScreen.IsGameOver && !_introScreen.IsWaitingForGameOverKey)
             {
-                // Only host spawns and updates snipes - clients receive updates via gRPC
-                if (!_isMultiplayer || (_gameSession != null && _gameSession.Role == GameSessionRole.Host))
+                // Server-authoritative: server runs simulation and sends state; no local snipe/hive updates in multiplayer
+                if (!_isMultiplayer)
                 {
                     SpawnSnipes();
                     UpdateSnipes();
-                    PublishSnipeUpdates(); // Publish snipe state to clients
                 }
-                SetNeedsDraw(); // Trigger redraw for snipes
+                SetNeedsDraw();
             }
             return true;
         });
@@ -577,15 +583,18 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
             if (shouldFire && (velX != 0 || velY != 0))
             {
+                // Server-authoritative: in multiplayer send fire input only; server adds bullet and sends state
+                if (_isMultiplayer && _gameSession != null && _grpcClient != null)
+                {
+                    int fireDx = velX > 0 ? 1 : (velX < 0 ? -1 : 0);
+                    int fireDy = velY > 0 ? 1 : (velY < 0 ? -1 : 0);
+                    _ = _grpcClient.SendInputAsync(_gameSession.GameId, _gameSession.PlayerId, 0, 0, fireDx, fireDy);
+                    return;
+                }
+
                 string? playerId = _gameSession?.PlayerId;
                 var bullet = new Bullet(startX, startY, velX, velY, playerId: playerId, createdAt: _currentFrameTime);
                 _bullets.Add(bullet);
-                
-                // Publish bullet fired in multiplayer
-                if (_isMultiplayer && _gameSession != null && _grpcClient != null)
-                {
-                    PublishBulletFired(bullet);
-                }
                 
                 // Redraw to show the new bullet
                 if (_mapDrawn)
@@ -709,8 +718,10 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             newWorldX = _map.WrapX(newWorldX);
             newWorldY = _map.WrapY(newWorldY);
             
-            // Check against all other players (local and remote)
-            foreach (var networkPlayer in _networkPlayers.Values)
+            // Check against all other players (local and remote) - snapshot to avoid collection modified during iteration
+            List<PlayerNetwork> playersCopy;
+            lock (_gameStateLock) { playersCopy = new List<PlayerNetwork>(_networkPlayers.Values); }
+            foreach (var networkPlayer in playersCopy)
             {
                 if (networkPlayer.PlayerId == _gameSession.PlayerId)
                     continue; // Skip self
@@ -753,11 +764,11 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
         // Invalidate cached map since player moved
         _cachedMapViewport = null;
-        
-        // Publish position update in multiplayer
+
+        // Server-authoritative: send move input so server can update simulation
         if (_isMultiplayer && _gameSession != null && _grpcClient != null)
         {
-            PublishPlayerPosition();
+            _ = _grpcClient.SendInputAsync(_gameSession.GameId, _gameSession.PlayerId, deltaX, deltaY, 0, 0);
         }
     }
 
@@ -806,8 +817,6 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
     private void DrawMapAndPlayer()
     {
-        
-
         int currentWidth = Frame.Width;
         int currentHeight = Frame.Height;
 
@@ -817,6 +826,32 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
         int frameWidth = currentWidth;
         int frameHeight = currentHeight - StatusBarHeight; // Account for status bar
+
+        // Joining player: don't draw map until we've received at least one snapshot with our position (avoids broken/misaligned map and invisible walls)
+        if (_isMultiplayer && !_hasReceivedMultiplayerSnapshot)
+        {
+            _lastFrameWidth = frameWidth;
+            _lastFrameHeight = frameHeight;
+            DrawStatusBar();
+            SetAttribute(new DrawingAttribute(Color.Yellow, Color.Black));
+            int msgRow = StatusBarHeight + (frameHeight / 2) - 1;
+            if (msgRow >= StatusBarHeight && msgRow < currentHeight)
+            {
+                Move(0, msgRow);
+                string msg = " Syncing game state... ";
+                if (msg.Length < frameWidth)
+                    msg = msg.PadRight(frameWidth);
+                else
+                    msg = msg.Substring(0, frameWidth);
+                this.AddString(msg);
+            }
+            SetAttribute(new DrawingAttribute(Color.White, Color.Black));
+            return;
+        }
+
+        // Use a single captured position for the whole draw to avoid torn reads when snapshot updates _player mid-draw
+        int centerX = _player.X;
+        int centerY = _player.Y;
 
         // Check if dimensions changed - if so, we need to clear and redraw everything
         bool dimensionsChanged = (frameWidth != _lastFrameWidth || frameHeight != _lastFrameHeight);
@@ -836,7 +871,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             }
         }
 
-        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
+        var map = _map.GetMap(frameWidth, frameHeight, centerX, centerY);
 
         // Cache map viewport for reuse in other drawing functions
         _cachedMapViewport = map;
@@ -1387,8 +1422,10 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         bulletWorldX = _map.WrapX(bulletWorldX);
         bulletWorldY = _map.WrapY(bulletWorldY);
         
-        // Check against all network players (including local)
-        foreach (var networkPlayer in _networkPlayers.Values)
+        // Check against all network players (including local) - snapshot to avoid collection modified during iteration
+        List<PlayerNetwork> playersCopy;
+        lock (_gameStateLock) { playersCopy = new List<PlayerNetwork>(_networkPlayers.Values); }
+        foreach (var networkPlayer in playersCopy)
         {
             // Skip if bullet belongs to this player
             if (bullet.PlayerId == networkPlayer.PlayerId)
@@ -1534,9 +1571,13 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         int mapOffsetX = _player.X - (frameWidth / 2);
         int mapOffsetY = _player.Y - (frameHeight / 2);
 
+        // Snapshot bullets so we don't iterate while HandleGameStateSnapshot modifies the list (multiplayer)
+        List<Bullet> bulletsCopy;
+        lock (_gameStateLock) { bulletsCopy = new List<Bullet>(_bullets); }
+
         // First, clear previous bullet positions by drawing the map character there
         SetAttribute(new DrawingAttribute(Color.Blue, Color.Black));
-        foreach (var bullet in _bullets)
+        foreach (var bullet in bulletsCopy)
         {
             // Convert previous world coordinates to viewport coordinates
             int prevViewportX = (int)Math.Round(bullet.PreviousX) - mapOffsetX;
@@ -1573,7 +1614,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         SetAttribute(new DrawingAttribute(bulletColor, Color.Black));
 
         // Now draw bullets at their current positions
-        foreach (var bullet in _bullets)
+        foreach (var bullet in bulletsCopy)
         {
             // Convert world coordinates to viewport coordinates
             int viewportX = (int)Math.Round(bullet.X) - mapOffsetX;
@@ -1593,7 +1634,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
     private void DrawHives()
     {
-        
+        List<Hive> hivesCopy;
+        lock (_gameStateLock) { hivesCopy = new List<Hive>(_hives); }
 
         int currentWidth = Frame.Width;
         int currentHeight = Frame.Height;
@@ -1615,7 +1657,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         int minViewportY = -2;
         int maxViewportY = frameHeight + 1;
 
-        foreach (var hive in _hives)
+        foreach (var hive in hivesCopy)
         {
             if (hive.IsDestroyed)
                 continue;
@@ -2575,9 +2617,11 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     /// </summary>
     private HashSet<(int x, int y)> BuildPreviousSnipePositions()
     {
-        HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>(_snipes.Count * 2); // Each snipe has 2 positions (@ + arrow)
+        List<Snipe> snipesCopy;
+        lock (_gameStateLock) { snipesCopy = new List<Snipe>(_snipes); }
+        HashSet<(int x, int y)> positionsToClear = new HashSet<(int, int)>(snipesCopy.Count * 2); // Each snipe has 2 positions (@ + arrow)
 
-        foreach (var snipe in _snipes)
+        foreach (var snipe in snipesCopy)
         {
             if (!snipe.IsAlive)
                 continue;
@@ -2616,7 +2660,9 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     /// </summary>
     private void RemoveCurrentSnipePositions(HashSet<(int x, int y)> positionsToClear)
     {
-        foreach (var snipe in _snipes)
+        List<Snipe> snipesCopy;
+        lock (_gameStateLock) { snipesCopy = new List<Snipe>(_snipes); }
+        foreach (var snipe in snipesCopy)
         {
             if (!snipe.IsAlive)
                 continue;
@@ -2732,9 +2778,9 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     /// <summary>
     /// Updates PreviousX/PreviousY for all snipes to match what was actually drawn
     /// </summary>
-    private void UpdateSnipePreviousPositions()
+    private void UpdateSnipePreviousPositions(List<Snipe> snipes)
     {
-        foreach (var snipe in _snipes)
+        foreach (var snipe in snipes)
         {
             if (!snipe.IsAlive)
                 continue;
@@ -2771,8 +2817,10 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         // Step 3: Clear all positions that remain in positionsToClear (no longer occupied)
         ClearSnipePreviousPositions(positionsToClear, frameWidth, frameHeight);
 
-        // Step 4: Draw snipes at their new positions
-        foreach (var snipe in _snipes)
+        // Step 4: Draw snipes at their new positions (snapshot to avoid collection modified during iteration)
+        List<Snipe> snipesCopy;
+        lock (_gameStateLock) { snipesCopy = new List<Snipe>(_snipes); }
+        foreach (var snipe in snipesCopy)
         {
             if (!snipe.IsAlive)
                 continue;
@@ -2783,7 +2831,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         SetAttribute(new DrawingAttribute(Color.White, Color.Black));
 
         // CRITICAL: Update PreviousX/PreviousY to match what was actually drawn
-        UpdateSnipePreviousPositions();
+        UpdateSnipePreviousPositions(snipesCopy);
     }
 
     // Callback for IntroScreen to get map character at position during clearing effect
@@ -3479,12 +3527,15 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         if (!_isMultiplayer || _gameSession == null || false)
             return;
         
+        List<PlayerNetwork> playersCopy;
+        lock (_gameStateLock) { playersCopy = new List<PlayerNetwork>(_networkPlayers.Values); }
+        
         int currentWidth = Frame.Width;
         int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
         int frameHeight = _lastFrameHeight != 0 ? _lastFrameHeight : (currentHeight - StatusBarHeight);
         
-        foreach (var networkPlayer in _networkPlayers.Values)
+        foreach (var networkPlayer in playersCopy)
         {
             if (networkPlayer.IsLocal)
                 continue; // Skip local player (already drawn)
@@ -3551,6 +3602,9 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         if (!_isMultiplayer || _gameSession == null || false)
             return;
         
+        List<PlayerNetwork> playersCopy;
+        lock (_gameStateLock) { playersCopy = new List<PlayerNetwork>(_networkPlayers.Values); }
+        
         int currentWidth = Frame.Width;
         int currentHeight = Frame.Height;
         int frameWidth = _lastFrameWidth != 0 ? _lastFrameWidth : currentWidth;
@@ -3563,7 +3617,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
         }
         
-        foreach (var networkPlayer in _networkPlayers.Values)
+        foreach (var networkPlayer in playersCopy)
         {
             if (networkPlayer.IsLocal)
                 continue; // Skip local player (already drawn)
@@ -3679,6 +3733,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         {
             // Ensure multiplayer is disabled
             _isMultiplayer = false;
+            _hasReceivedMultiplayerSnapshot = false;
             _gameSession = null;
             _grpcClient = null;
             _networkPlayers.Clear();
@@ -3810,15 +3865,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                 return false; // Stop timer when game starts
             });
             
-            // Start timer to check if we should start game (60 seconds or max players)
-            _app.TimedEvents?.Add(TimeSpan.FromSeconds(60), () =>
-            {
-                if (_gameSession != null && _gameSession.Status == GameSessionStatus.WaitingForPlayers)
-                {
-                    StartMultiplayerGameSession();
-                }
-                return false; // One-time timer
-            });
+            // Server starts game when 60s or max players; host and clients receive GameStartMessage from server
         }
         catch (Exception)
         {
@@ -3995,12 +4042,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                     });
                 }
                 
-                // Check if we should start (max players reached)
-                if (_gameSession.Role == GameSessionRole.Host && 
-                    message.PlayerJoin.CurrentPlayers >= message.PlayerJoin.MaxPlayers)
-                {
-                    StartMultiplayerGameSession();
-                }
+                // Server starts game when full or 60s; host and clients all wait for GameStartMessage from server
             }
             // Handle player count updates
             else if (message.PlayerCount != null)
@@ -4049,7 +4091,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             else if (message.GameStart != null)
             {
                 _gameSession.Status = GameSessionStatus.Starting;
-                
+                _hasReceivedMultiplayerSnapshot = false; // Joiner must wait for first snapshot before drawing map
+
                 // Initialize network players
                 foreach (var playerId in message.GameStart.PlayerIds)
                 {
@@ -4198,106 +4241,119 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         // Client receives game state snapshot from host
         try
         {
-            // Update game state
-            _gameState.Level = snapshot.Level;
-            
-            // Update hives from host
-            _hives.Clear();
-            // Calculate snipes per hive from level (needed for Hive constructor)
-            int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(snapshot.Level);
-            if (snapshot.Hives != null)
+            lock (_gameStateLock)
             {
-                foreach (var hiveState in snapshot.Hives)
+                // Update game state
+                _gameState.Level = snapshot.Level;
+                
+                // Update hives from host
+                _hives.Clear();
+                // Calculate snipes per hive from level (needed for Hive constructor)
+                int snipesPerHive = _gameState.GetSnipesPerHiveForLevel(snapshot.Level);
+                if (snapshot.Hives != null)
                 {
-                    if (hiveState == null)
-                        continue;
-                    
-                    var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive, _currentFrameTime)
+                    foreach (var hiveState in snapshot.Hives)
                     {
-                        Hits = hiveState.Hits,
-                        IsDestroyed = hiveState.IsDestroyed,
-                        SnipesRemaining = hiveState.SnipesRemaining,
-                        FlashIntervalMs = hiveState.FlashIntervalMs
-                    };
-                    _hives.Add(hive);
-                }
-            }
-            _gameState.TotalHives = snapshot.Hives?.Count ?? 0;
-            // Count undestroyed hives manually to avoid LINQ allocation
-            int undestroyedCount = 0;
-            if (snapshot.Hives != null)
-            {
-                foreach (var h in snapshot.Hives)
-                {
-                    if (h != null && !h.IsDestroyed)
-                        undestroyedCount++;
-                }
-            }
-            _gameState.HivesUndestroyed = undestroyedCount;
-            
-            // Update snipes from host
-            // IMPORTANT: snipeState.X and snipeState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
-            _snipes.Clear();
-            if (snapshot.Snipes != null)
-            {
-                foreach (var snipeState in snapshot.Snipes)
-                {
-                    if (snipeState == null)
-                        continue;
-                    
-                    if (snipeState.IsAlive)
-                    {
-                        // Convert string type from gRPC to enum
-                        SnipeType snipeType = ParseSnipeType(snipeState.Type);
-                        var snipe = new Snipe(snipeState.X, snipeState.Y, snipeType)  // World coordinates
+                        if (hiveState == null)
+                            continue;
+                        
+                        var hive = new Hive(hiveState.X, hiveState.Y, snipesPerHive, _currentFrameTime)
                         {
-                            DirectionX = snipeState.DirectionX,
-                            DirectionY = snipeState.DirectionY,
-                            IsAlive = snipeState.IsAlive
+                            Hits = hiveState.Hits,
+                            IsDestroyed = hiveState.IsDestroyed,
+                            SnipesRemaining = hiveState.SnipesRemaining,
+                            FlashIntervalMs = hiveState.FlashIntervalMs
                         };
-                        _snipes.Add(snipe);
+                        _hives.Add(hive);
                     }
                 }
-            }
-            
-            // Count alive snipes manually to avoid LINQ allocation
-            int aliveCount = 0;
-            if (snapshot.Snipes != null)
-            {
-                foreach (var s in snapshot.Snipes)
+                _gameState.TotalHives = snapshot.Hives?.Count ?? 0;
+                // Count undestroyed hives manually to avoid LINQ allocation
+                int undestroyedCount = 0;
+                if (snapshot.Hives != null)
                 {
-                    if (s != null && s.IsAlive)
-                        aliveCount++;
-                }
-            }
-            _gameState.SnipesUndestroyed = aliveCount;
-            
-            // Update player states
-            // IMPORTANT: playerState.X and playerState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
-            if (snapshot.Players != null)
-            {
-                foreach (var playerState in snapshot.Players)
-                {
-                    if (playerState == null)
-                        continue;
-                    
-                    if (_networkPlayers.TryGetValue(playerState.PlayerId, out var networkPlayer))
+                    foreach (var h in snapshot.Hives)
                     {
-                        // Store world coordinates - conversion to viewport happens when drawing
-                        // Update previous position to avoid artifacts
-                        networkPlayer.PreviousX = networkPlayer.X;
-                        networkPlayer.PreviousY = networkPlayer.Y;
-                        networkPlayer.X = playerState.X;  // World coordinate
-                        networkPlayer.Y = playerState.Y;  // World coordinate
-                        networkPlayer.Lives = playerState.Lives;
-                        networkPlayer.Score = playerState.Score;
-                        networkPlayer.IsAlive = playerState.IsAlive;
-                        // Update initials from game state (in case they were "??" before)
-                        if (!string.IsNullOrEmpty(playerState.Initials))
-                        {
-                            networkPlayer.Initials = playerState.Initials;
-                        }
+                        if (h != null && !h.IsDestroyed)
+                            undestroyedCount++;
+                    }
+                }
+                _gameState.HivesUndestroyed = undestroyedCount;
+                
+                // Update snipes from host
+                // IMPORTANT: snipeState.X and snipeState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
+                _snipes.Clear();
+                if (snapshot.Snipes != null)
+                {
+                    foreach (var snipeState in snapshot.Snipes)
+                    {
+                        if (snipeState == null)
+                            continue;
                         
+                        if (snipeState.IsAlive)
+                        {
+                            // Convert string type from gRPC to enum
+                            SnipeType snipeType = ParseSnipeType(snipeState.Type);
+                            var snipe = new Snipe(snipeState.X, snipeState.Y, snipeType)  // World coordinates
+                            {
+                                DirectionX = snipeState.DirectionX,
+                                DirectionY = snipeState.DirectionY,
+                                IsAlive = snipeState.IsAlive
+                            };
+                            _snipes.Add(snipe);
+                        }
+                    }
+                }
+                
+                // Count alive snipes manually to avoid LINQ allocation
+                int aliveCount = 0;
+                if (snapshot.Snipes != null)
+                {
+                    foreach (var s in snapshot.Snipes)
+                    {
+                        if (s != null && s.IsAlive)
+                            aliveCount++;
+                    }
+                }
+                _gameState.SnipesUndestroyed = aliveCount;
+
+                // Update bullets from server state (server-authoritative)
+                _bullets.Clear();
+                if (snapshot.Bullets != null)
+                {
+                    foreach (var b in snapshot.Bullets)
+                    {
+                        if (b == null) continue;
+                        _bullets.Add(new Bullet(b.X, b.Y, b.VelocityX, b.VelocityY, b.BulletId, b.PlayerId, _currentFrameTime));
+                    }
+                }
+
+                // Update player states
+                // IMPORTANT: playerState.X and playerState.Y are WORLD/MAP coordinates (0 to MapWidth/MapHeight)
+                if (snapshot.Players != null)
+                {
+                    foreach (var playerState in snapshot.Players)
+                    {
+                        if (playerState == null)
+                            continue;
+                        
+                        if (_networkPlayers.TryGetValue(playerState.PlayerId, out var networkPlayer))
+                        {
+                            // Store world coordinates - conversion to viewport happens when drawing
+                            // Update previous position to avoid artifacts
+                            networkPlayer.PreviousX = networkPlayer.X;
+                            networkPlayer.PreviousY = networkPlayer.Y;
+                            networkPlayer.X = playerState.X;  // World coordinate
+                            networkPlayer.Y = playerState.Y;  // World coordinate
+                            networkPlayer.Lives = playerState.Lives;
+                            networkPlayer.Score = playerState.Score;
+                            networkPlayer.IsAlive = playerState.IsAlive;
+                            // Update initials from game state (in case they were "??" before)
+                            if (!string.IsNullOrEmpty(playerState.Initials))
+                            {
+                                networkPlayer.Initials = playerState.Initials;
+                            }
+                            
                         if (networkPlayer.IsLocal)
                         {
                             _player.X = playerState.X;  // World coordinate
@@ -4310,73 +4366,76 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                             {
                                 _player.Initials = playerState.Initials;
                             }
+                            _hasReceivedMultiplayerSnapshot = true; // Safe to draw map with server position
                             _cachedMapViewport = null; // Force map redraw
                         }
-                    }
-                    else
-                    {
-                        // New player not in our network players list - create them (avoid LINQ FirstOrDefault)
-                        NetworkPlayerInfo? playerInfo = null;
-                        if (_gameSession != null)
+                        }
+                        else
                         {
-                            foreach (var p in _gameSession.Players)
+                            // New player not in our network players list - create them (avoid LINQ FirstOrDefault)
+                            NetworkPlayerInfo? playerInfo = null;
+                            if (_gameSession != null)
                             {
-                                if (p.PlayerId == playerState.PlayerId)
+                                foreach (var p in _gameSession.Players)
                                 {
-                                    playerInfo = p;
-                                    break;
+                                    if (p.PlayerId == playerState.PlayerId)
+                                    {
+                                        playerInfo = p;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        var isLocalPlayer = playerState.PlayerId == _gameSession?.PlayerId;
-                        
-                        // Create network player even if not in game session (shouldn't happen, but be safe)
-                        var newNetworkPlayer = new PlayerNetwork(
-                            playerState.PlayerId,
-                            !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : (playerInfo?.Initials ?? "??"),
-                            playerInfo?.PlayerNumber ?? 0,
-                            isLocal: isLocalPlayer
-                        );
-                        newNetworkPlayer.PreviousX = playerState.X;
-                        newNetworkPlayer.PreviousY = playerState.Y;
-                        newNetworkPlayer.X = playerState.X;
-                        newNetworkPlayer.Y = playerState.Y;
-                        newNetworkPlayer.Lives = playerState.Lives;
-                        newNetworkPlayer.Score = playerState.Score;
-                        newNetworkPlayer.IsAlive = playerState.IsAlive;
-                        _networkPlayers[playerState.PlayerId] = newNetworkPlayer;
-                        
-                        // Also add to game session if not already there
-                        if (playerInfo == null && _gameSession != null)
-                        {
-                            _gameSession.Players.Add(new NetworkPlayerInfo
+                            var isLocalPlayer = playerState.PlayerId == _gameSession?.PlayerId;
+                            
+                            // Create network player even if not in game session (shouldn't happen, but be safe)
+                            var newNetworkPlayer = new PlayerNetwork(
+                                playerState.PlayerId,
+                                !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : (playerInfo?.Initials ?? "??"),
+                                playerInfo?.PlayerNumber ?? 0,
+                                isLocal: isLocalPlayer
+                            );
+                            newNetworkPlayer.PreviousX = playerState.X;
+                            newNetworkPlayer.PreviousY = playerState.Y;
+                            newNetworkPlayer.X = playerState.X;
+                            newNetworkPlayer.Y = playerState.Y;
+                            newNetworkPlayer.Lives = playerState.Lives;
+                            newNetworkPlayer.Score = playerState.Score;
+                            newNetworkPlayer.IsAlive = playerState.IsAlive;
+                            _networkPlayers[playerState.PlayerId] = newNetworkPlayer;
+                            
+                            // Also add to game session if not already there
+                            if (playerInfo == null && _gameSession != null)
                             {
-                                PlayerId = playerState.PlayerId,
-                                Initials = !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : "??",
-                                PlayerNumber = 0
-                            });
-                        }
-                        
-                        if (newNetworkPlayer.IsLocal)
-                        {
-                            _player.X = playerState.X;
-                            _player.Y = playerState.Y;
-                            _player.Lives = playerState.Lives;
-                            _player.Score = playerState.Score;
-                            _player.IsAlive = playerState.IsAlive;
-                            if (!string.IsNullOrEmpty(playerState.Initials))
-                            {
-                                _player.Initials = playerState.Initials;
+                                _gameSession.Players.Add(new NetworkPlayerInfo
+                                {
+                                    PlayerId = playerState.PlayerId,
+                                    Initials = !string.IsNullOrEmpty(playerState.Initials) ? playerState.Initials : "??",
+                                    PlayerNumber = 0
+                                });
                             }
-                            _cachedMapViewport = null;
+                            
+                            if (newNetworkPlayer.IsLocal)
+                            {
+                                _player.X = playerState.X;
+                                _player.Y = playerState.Y;
+                                _player.Lives = playerState.Lives;
+                                _player.Score = playerState.Score;
+                                _player.IsAlive = playerState.IsAlive;
+                                if (!string.IsNullOrEmpty(playerState.Initials))
+                                {
+                                    _player.Initials = playerState.Initials;
+                                }
+                                _hasReceivedMultiplayerSnapshot = true;
+                                _cachedMapViewport = null;
+                            }
                         }
                     }
                 }
-            }
             
-            // Force map redraw to show hives and players
-            _cachedMapViewport = null;
-            _mapDrawn = false;
+                // Force map redraw to show hives and players
+                _cachedMapViewport = null;
+                _mapDrawn = false;
+            }
         }
         catch (Exception)
         {

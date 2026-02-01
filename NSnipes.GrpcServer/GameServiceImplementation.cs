@@ -299,7 +299,7 @@ public class GameServiceImplementation : GameService.GameServiceBase
                 }
             }
             
-            // Process incoming messages and forward to other players
+            // Process incoming messages: apply input to server simulation, or forward control messages
             var readTask = Task.Run(async () =>
             {
                 try
@@ -307,8 +307,16 @@ public class GameServiceImplementation : GameService.GameServiceBase
                     await foreach (var message in requestStream.ReadAllAsync())
                     {
                         if (room == null) break;
-                        
-                        // Forward message to all other players in the room
+
+                        // Server-authoritative: apply player input to simulation; do not relay position/bullet
+                        if (message.PlayerInput != null)
+                        {
+                            room.ApplyInput(message.PlayerId, message.PlayerInput.MoveDx, message.PlayerInput.MoveDy,
+                                message.PlayerInput.FireDx, message.PlayerInput.FireDy);
+                            continue;
+                        }
+
+                        // Relay other messages (gameStart, playerJoin, etc.) for backward compatibility
                         await room.BroadcastMessageAsync(message, playerId);
                     }
                 }
@@ -338,12 +346,20 @@ public class GameServiceImplementation : GameService.GameServiceBase
         }
         finally
         {
-            // Clean up
+            // Clean up this player's connection
             if (playerId != null && gameId != null && room != null)
             {
                 room.RemovePlayer(playerId);
                 _playerToRoom.TryRemove(playerId, out _);
                 _logger.LogInformation("Player {PlayerId} disconnected from game {GameId}", playerId, gameId);
+
+                // If no players left, abandon the game to free resources
+                if (room.CurrentPlayers == 0)
+                {
+                    room.StopSimulation();
+                    _roomManager.RemoveRoom(gameId);
+                    _logger.LogInformation("Game {GameId} abandoned (all players left). Room removed.", gameId);
+                }
             }
         }
     }

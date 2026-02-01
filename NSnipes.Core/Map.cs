@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace NSnipes;
 
 public class Map
@@ -21,14 +19,14 @@ public class Map
 "                              ║              ║              ║              ║                                            ║              ║              ║                                            ║              ║              ║                             ║                                            ║              ║                                                            ",
 "               ╔══════════════╝              ║              ╚══════════════╝              ╔═════════════════════════════╣              ║              ╠═════════════════════════════╦══════════════╝              ║              ║              ╔══════════════╩═════════════                 ══════════════╝              ║              ═══════════════╦═════════════════════════════ ",
 "               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
-"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
-"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
-"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
+"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
+"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
+"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
 "═══════════════╝              ╔══════════════╣              ╔══════════════╦══════════════╝              ║              ╚══════════════╗                                                           ╔══════════════╩═════════════════════════════╣              ══════════════════════════════════════════════              ╚══════════════╗              ╚══════════════╗               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
 "               ╔══════════════╣              ║              ║              ║              ═══════════════╬══════════════╗              ╠═════════════════════════════╬══════════════╦══════════════╝              ══════════════════════════════╝              ╔═══════════════              ╔════════════════════════════════════════════╬═══════════════              ║               ",
 "               ║              ║                             ║              ║                             ║              ║              ║                             ║              ║                                                                          ║                             ║                                            ║                             ║               ",
 "               ║              ║                             ║              ║                             ║              ║              ║                             ║              ║                                                                          ║                             ║                                            ║                             ║               ",
@@ -135,58 +133,31 @@ public class Map
     public int MapWidth => _map[0].Length;
     public int MapHeight => _map.Length;
 
-    public Map()
-    {
+    public Map() { }
 
+    public int WrapX(int x) => (x % MapWidth + MapWidth) % MapWidth;
+    public int WrapY(int y) => (y % MapHeight + MapHeight) % MapHeight;
 
-    }
-
-    /// <summary>
-    /// Wraps an X coordinate to map bounds using modulo arithmetic
-    /// </summary>
-    public int WrapX(int x)
-    {
-        return (x % MapWidth + MapWidth) % MapWidth;
-    }
-
-    /// <summary>
-    /// Wraps a Y coordinate to map bounds using modulo arithmetic
-    /// </summary>
-    public int WrapY(int y)
-    {
-        return (y % MapHeight + MapHeight) % MapHeight;
-    }
-
-    /// <summary>
-    /// Wraps a deltaX value to find the shortest path (accounting for map wrapping)
-    /// If the difference is more than half the map size, wrap around
-    /// </summary>
     public void WrapDeltaX(ref int deltaX)
     {
-        if (deltaX > MapWidth / 2)
-            deltaX -= MapWidth;
-        else if (deltaX < -MapWidth / 2)
-            deltaX += MapWidth;
+        if (deltaX > MapWidth / 2) deltaX -= MapWidth;
+        else if (deltaX < -MapWidth / 2) deltaX += MapWidth;
     }
 
-    /// <summary>
-    /// Wraps a deltaY value to find the shortest path (accounting for map wrapping)
-    /// If the difference is more than half the map size, wrap around
-    /// </summary>
     public void WrapDeltaY(ref int deltaY)
     {
-        if (deltaY > MapHeight / 2)
-            deltaY -= MapHeight;
-        else if (deltaY < -MapHeight / 2)
-            deltaY += MapHeight;
+        if (deltaY > MapHeight / 2) deltaY -= MapHeight;
+        else if (deltaY < -MapHeight / 2) deltaY += MapHeight;
     }
 
-    /// <summary>
-    /// Checks if the given coordinates are within valid map bounds
-    /// </summary>
-    public bool IsValidCoordinate(int x, int y)
+    public bool IsValidCoordinate(int x, int y) =>
+        x >= 0 && x < MapWidth && y >= 0 && y < MapHeight;
+
+    /// <summary>Returns true if the cell is walkable (space).</summary>
+    public bool IsWalkable(int x, int y)
     {
-        return x >= 0 && x < MapWidth && y >= 0 && y < MapHeight;
+        if (!IsValidCoordinate(x, y)) return false;
+        return FullMap[y][x] == ' ';
     }
 
     public string[] GetMap(int frameWidth, int frameHeight, int x, int y)
@@ -194,37 +165,25 @@ public class Map
         string[] rows = new string[frameHeight];
         int mapRow = (y - (frameHeight / 2) + FullMap.Length) % FullMap.Length;
         int mapCol = x - (frameWidth / 2);
-        
-        // Pre-allocate buffer outside loop to avoid CA2014 warning (stackalloc in loop)
-        // frameWidth is typically small (terminal width), so stackalloc is safe
         Span<char> buffer = stackalloc char[frameWidth];
 
         for (int r = 0; r < frameHeight; r++)
         {
             string fullRow = FullMap[mapRow];
             int rowLength = fullRow.Length;
-
-            // Handle negative mapCol by wrapping around from the right  
             int startCol = (mapCol % rowLength + rowLength) % rowLength;
 
-            // Construct the row by taking from the right and wrapping to the left if needed  
             if (startCol + frameWidth <= rowLength)
-            {
                 rows[r] = fullRow.AsSpan(startCol, frameWidth).ToString();
-            }
             else
             {
-                // Avoid string concatenation - reuse pre-allocated buffer
                 int rightPartLength = rowLength - startCol;
                 fullRow.AsSpan(startCol, rightPartLength).CopyTo(buffer);
                 fullRow.AsSpan(0, frameWidth - rightPartLength).CopyTo(buffer[rightPartLength..]);
                 rows[r] = new string(buffer);
             }
-
-            // Increment mapRow and wrap around if it exceeds the length of FullMap  
             mapRow = (mapRow + 1) % FullMap.Length;
         }
-
         return rows;
     }
 }

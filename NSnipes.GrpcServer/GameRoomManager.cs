@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 namespace NSnipes.GrpcServer;
 
@@ -6,11 +7,31 @@ public class GameRoomManager
 {
     private readonly ConcurrentDictionary<string, GameRoom> _rooms = new();
     private readonly Timer _cleanupTimer;
-    
-    public GameRoomManager()
+    private readonly Timer _startCheckTimer;
+    private readonly ILogger<GameRoomManager>? _logger;
+
+    public GameRoomManager(ILogger<GameRoomManager> logger)
     {
-        // Clean up old rooms every 5 minutes
+        _logger = logger;
         _cleanupTimer = new Timer(CleanupOldRooms, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        _startCheckTimer = new Timer(CheckRoomsToStart, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private void CheckRoomsToStart(object? state)
+    {
+        foreach (var room in _rooms.Values)
+        {
+            if (room.IsStarted) continue;
+            if (!room.IsFull && (DateTime.UtcNow - room.CreatedAt).TotalSeconds < 60) continue;
+            try
+            {
+                room.StartGameSimulation(_logger);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to start game simulation for room {GameId}", room.GameId);
+            }
+        }
     }
     
     public GameRoom CreateRoom(string gameId, string hostPlayerId, string hostInitials, int maxPlayers, int startingLevel)

@@ -120,9 +120,9 @@ Use the provided scripts to run the game:
 
 **Multiplayer Tips:**
 - All players should use the same starting level for consistency
-- The host controls game state (hives, snipes) - clients receive updates
-- All players can move and shoot independently
-- Player positions, bullets, and game state are synchronized in real-time
+- The **server** (not the host) is the game authority: it runs the simulation and broadcasts state; all clients send only input (move/fire) and render the state they receive
+- All players can move and shoot independently; bullets, snipes, hives, level, and scores are synchronized in real-time from the server
+- When all players leave (gracefully or by disconnect), the server abandons the game and frees the room
 - If the host disconnects, the game may become unstable (host migration not yet implemented)
 
 ![Intro Screen](./nsnipes-intro.png)
@@ -133,6 +133,38 @@ Game play, your player remains central - as you move the map moves around you an
 
 You can shoot snipes, you have bullets that can be shot in any direction and will bounce off walls too!   You can shoot hives, though it will take 3 shots to destroy a hive - hives are valuable to shoot, as you'll gain points for shooting the hive plus points for all of the un-released snipes within the hive -- shoot them quickly to gain more points!
 
+## Architecture & industry context
+
+### Target architecture (multiplayer)
+
+Multiplayer uses a **server-authoritative** model over **gRPC** with bidirectional streaming:
+
+```
+┌─────────┐         ┌──────────────┐         ┌─────────┐
+│ Player1 │◄───────►│ gRPC Server  │◄───────►│ Player2 │
+│ (Client)│         │ (Authority)  │         │ (Client)│
+└─────────┘         └──────────────┘         └─────────┘
+```
+
+- **Server** (`NSnipes.GrpcServer`): Runs the game simulation (`NSnipes.Core.GameSimulation`) in a tick loop. Receives **input only** (move/fire) from each client, applies it, ticks the sim, and broadcasts a **game state snapshot** (players, hives, snipes, bullets, level, scores, lives) to all clients at ~20 Hz.
+- **Clients** (`NSnipes`): Send **input only** (direction and fire); do not run the sim in multiplayer. They render the state received from the server (map, entities, bullets). Joining players see "Syncing game state..." until the first snapshot arrives so the map and collision stay correct.
+- **Shared core** (`NSnipes.Core`): Map, GameState, Player, Hive, Snipe, Bullet, and `GameSimulation` live in a single library so the server and (for future refactor) single-player can use the same logic.
+
+This gives a single source of truth on the server, consistent bullets/snipes/level for everyone, and a clean split between input (client) and simulation (server).
+
+### Why server-authoritative?
+
+- **Single source of truth**: One simulation avoids desyncs between host and clients.
+- **Sync**: Bullets, snipes, hives, level progression, and scores are identical for all players because they all come from the server.
+- **Cheat resistance**: Clients cannot dictate outcomes; they only send input.
+
+### Why gRPC?
+
+From the [multiplayer networking analysis](MULTIPLAYER_NETWORKING_ANALYSIS.md): gRPC was chosen over MQTT and WebSockets for server-based multiplayer because it offers **lower latency** (HTTP/2 + binary protobuf, ~25–70 ms), **type-safe** generated code, **native .NET** support (ASP.NET Core), and the **same user experience** (join by game ID, no IP addresses). Protocol Buffers keep messages compact and efficient for real-time state updates.
+
+### Single-player
+
+Single-player runs the game loop **locally** in the client (no server). An optional future refactor could run `GameSimulation` from `NSnipes.Core` locally for single-player too, so one code path drives both local and networked play.
 
 ## Preface
 When I started this project, I was in between jobs and had alot of spare time.  Since then i've been fortunate enough to be very busy working.  The downside, is that this project over the last 10 months or so has seen no activity.  While I am very keen to get this project completed to my initial vision, time is still very valuable to me.   So I decided to accellerate the development of this by using 'Vibe Coding' - I really do hate that term, there is nothing 'vibby' about what i'm doing - I'm using an AI tool 'Cursor', giving it instructions and letting it build some code for me.  When it gets it wrong i'm re-iterating my intent and coercing it down a more correct path.
@@ -144,33 +176,29 @@ It's not perfect, I know that - some of the code committed, I'm far from being 1
 It's been an interesting and sometimes frustrating journey so far working in this way, and while as I say above the code is far from being 100% perfect, the game has developed at a pace that I wasn't able to commit my own personal time to.
 
 So what's left to do:
-- Multiplayer Enhancements
-  - ✅ Start Multiplayer Game (implemented - prompts for player count, generates 6-character game ID, 60-second join window)
-  - ✅ Join Multiplayer Game (implemented - prompts for game ID, waits for game to start)
-  - ✅ Network game play (implemented - real-time synchronization of player positions, bullets, hives, snipes)
-  - ✅ Player visibility synchronization (fixed - all players can now see each other)
-  - ✅ Hive synchronization (fixed - hives visible to all players on game start and when joining)
-  - ✅ Server configuration UI (implemented - configure server address/port, status display)
-  - ⚠️ Bullet synchronization (partially working, needs refinement)
-  - ⚠️ Full game state synchronization (scores, lives) - partially implemented, needs refinement
-  - ✅ Multiplayer game end/results screen (implemented - shows rankings and scores when all players lose lives)
+- Multiplayer (server-authoritative)
+  - ✅ Start Multiplayer Game (prompts for player count, 6-character game ID, 60-second join window)
+  - ✅ Join Multiplayer Game (prompts for game ID, waits for game to start)
+  - ✅ Server-authoritative simulation (server runs `NSnipes.Core.GameSimulation`; clients send input only, receive state snapshots)
+  - ✅ Bullet, snipe, hive, level, and score synchronization (from server state)
+  - ✅ Player visibility and hive synchronization; joining player map fix (wait for first snapshot)
+  - ✅ Multiplayer game end/results screen; server abandons game when all players leave
+  - ✅ Server configuration UI (configure server address/port, status display)
   - ❌ Option to restart another game with all the same players
-  - ❌ Level progression synchronization in multiplayer (currently host-only)
-- Technical Debt
-  - ✅ Update Terminal.Gui library to latest develop branch (v2.0.0-develop.4828 - completed!)
-  - ✅ Upgrade to .NET 10 (completed for both NSnipes and NSnipes.GrpcServer)
+  - ⚠️ Extensive testing for multiplayer stability and wider network/internet
+- Single-player
+  - ✅ Single-player game play is complete (local game loop, no server)
+  - ⚠️ Optional: refactor single-player to use `NSnipes.Core.GameSimulation` locally (same logic as server)
+- Technical
+  - ✅ Terminal.Gui v2, .NET 10, zero warnings
   - ⚠️ Fix global [ESC] key handling across all screens
-  - ⚠️ Extensive testing needed for multiplayer stability
 
 ## TO-DO
 
-**Note**: Single Player game play is fairly complete at the moment.
+**Note**: Single-player is complete; multiplayer is server-authoritative and feature-complete for core play.
 
-- gRPC game play still not complete
-- Game play needs to move from NSnipes application into a common library that NSnipes consumes and so does the server.  This will allow single player to be performant, but allow multiplayer to be controlled directly by the server, instead of the player who starts a game - that way all players can correctly sync with where every snipe and player is, and each players bullets - I suspect bullet rates may need to be a little lower for multiplayer.
-- need more actual game play to test level-ups
-- need more game play to test multiplayer game over and the experience for all players
-- need to test multiplayer across a wider network and the internet -- suspect at the moment, it'll fail miserably.
+- Optional: use `GameSimulation` from `NSnipes.Core` for single-player too (one code path for local and server).
+- More playtesting for level-ups, game over, and multiplayer across wider network/internet.
 
 
 
@@ -349,7 +377,14 @@ So what's left to do:
 
 ## Recent Changes
 
-### gRPC Server Address Configuration (Latest)
+### Server-authoritative multiplayer & stability (Latest)
+- **Server-authoritative architecture**: Game logic lives in `NSnipes.Core` (Map, GameState, Player, Hive, Snipe, Bullet, `GameSimulation`). The gRPC server runs the simulation in a tick loop; clients send **input only** (move/fire) and render **state only** (snapshots from the server). Bullets, snipes, hives, level, and scores are fully synchronized from the server.
+- **Joining player map fix**: The joining client no longer draws the map until it has received at least one game state snapshot with its position, avoiding a broken/misaligned map and invisible walls. A "Syncing game state..." message is shown until then. The draw path also uses a single captured viewport per frame to avoid torn reads when snapshots update position mid-draw.
+- **Collection-modified crash fix**: Multiplayer could crash with "Collection was modified; enumeration operation may not execute" when the network thread updated hives/snipes/bullets/players while the UI thread was drawing them. All such updates are now under a lock, and all draw/iteration code takes a snapshot of the collection under that lock and iterates the snapshot.
+- **Server cleanup when all players leave**: When every player disconnects (gracefully or not), the server stops the game simulation and removes the room, freeing resources and avoiding errors from writing to closed streams.
+- **Server logging**: Console logging on the gRPC server now includes date and time (e.g. `yyyy-MM-dd HH:mm:ss`).
+
+### gRPC Server Address Configuration
 - **Server Address Default**: Changed default client server address from `localhost` to `127.0.0.1` for clarity
 - **Server Binding**: Server correctly binds to `0.0.0.0:5000` (listening on all network interfaces) - this is correct for server operation
 - **Client Connection**: Clients should connect to `127.0.0.1:5000` or `localhost:5000` (not `0.0.0.0:5000`)
@@ -517,19 +552,14 @@ So what's left to do:
 - **Multiplayer Support**: Game over triggers when ALL players lose all lives, showing all player scores
 
 ### Multiplayer Implementation
-- **gRPC Networking**: Implemented full multiplayer support using gRPC protocol (replaced MQTT)
-  - **Server**: Dedicated gRPC server manages game rooms and message routing
-  - **Client**: `GrpcGameClient` handles connection, game creation/joining, and bidirectional streaming
-  - **Protocol Buffers**: All game messages defined in `.proto` files for efficient binary serialization
-  - **Bidirectional Streaming**: Real-time game messages flow through persistent HTTP/2 connections
-- **Game Discovery**: Host can create games with 6-character game IDs, clients can join by ID
-- **Real-time Synchronization**: Player positions, bullets, hives, and snipes synchronized across all clients
-- **Host-Client Architecture**: Host is authoritative for game state (hives, snipes), all players can move and shoot
-- **Player Rendering**: Remote players displayed in yellow, local player in white/blue
-- **Position Synchronization**: Fixed initial position sync issues, proper world coordinate system
-- **Respawn Synchronization**: Player respawn positions properly synchronized across network
-- **Initials Synchronization**: Player initials correctly displayed for all players
-- **Network Message System**: Comprehensive protocol buffer messages for all game events (positions, bullets, game state)
+- **gRPC Networking**: Full multiplayer support using gRPC (replaced MQTT)
+  - **Server**: Dedicated gRPC server runs the game simulation (`NSnipes.Core.GameSimulation`) and manages rooms and message routing
+  - **Client**: `GrpcGameClient` handles connection, game creation/joining, and bidirectional streaming; clients send **input only** (move/fire), receive **state snapshots**
+  - **Protocol Buffers**: All game messages in `game.proto` (e.g. `PlayerInput`, `GameStateSnapshot` with players, hives, snipes, bullets, level, scores)
+  - **Bidirectional Streaming**: Real-time input and state over persistent HTTP/2 connections
+- **Server-authoritative**: Server is the single source of truth; bullets, snipes, hives, level, and scores are synchronized from server state
+- **Game Discovery**: Host creates games with 6-character game IDs; clients join by ID; game starts when full or 60s elapse
+- **Player Rendering**: Remote players in yellow, local player in white/blue; joining player sees "Syncing game state..." until first snapshot
 - **Single Player Mode**: When starting multiplayer with 1 player, game starts immediately without network (local play only)
 
 ### Intro Screen and Menu System
@@ -691,27 +721,19 @@ So what's left to do:
 - Game automatically starts after join window expires or max players reached
 
 **Network Architecture**
-- **gRPC-based networking** using dedicated server (default: `127.0.0.1:5000` for clients, server binds to `0.0.0.0:5000`)
-- **Server Management**: gRPC server manages game rooms, player connections, and message routing
-- **Bidirectional Streaming**: Real-time game messages flow through persistent HTTP/2 connections
-- **Protocol Buffers**: Efficient binary serialization for all game messages
-- Host-client architecture (host is authoritative for game state)
-- Real-time position synchronization (20ms update rate)
-- Bullet synchronization across all players
-- Game state synchronization (hives, snipes, player positions)
+- **gRPC-based, server-authoritative**: Server runs `NSnipes.Core.GameSimulation` in a tick loop; clients send input only (move/fire), receive state snapshots (~20 Hz)
+- **Server** (default: `127.0.0.1:5000` for clients, binds `0.0.0.0:5000`) manages game rooms, connections, and message routing
+- **Bidirectional streaming**: Input and state over persistent HTTP/2; Protocol Buffers for all messages
+- **State snapshots** include players, hives, snipes, bullets, level, scores, lives; joining clients wait for first snapshot before drawing the map
 
 **Player Synchronization**
-- All players see each other's movement in real-time
-- Remote players displayed in yellow (local player in white/blue)
-- Player initials synchronized across all clients
-- Player respawn positions synchronized
-- Player-to-player collision detection (players can't overlap)
+- All players see each other's movement in real-time; remote players in yellow, local in white/blue
+- Player initials, respawn positions, and positions synchronized from server state
+- Player-to-player collision (players can't overlap)
 
 **Game State Synchronization**
-- Hive positions synchronized (all players see same hives)
-- Snipe positions synchronized (host controls snipe movement, clients receive updates)
-- Bullet positions synchronized (all players can shoot, host validates collisions)
-- Game state snapshots on game start (ensures all players start with same state)
+- Hives, snipes, bullets, level, and scores are server-authoritative; all clients render the same state from snapshots
+- Game starts when max players join or 60s elapse; server abandons the game and frees the room when all players leave
 
 **Technical Implementation**
 - **gRPC Server**: Dedicated server (`NSnipes.GrpcServer`) manages all multiplayer connections
@@ -726,17 +748,13 @@ So what's left to do:
 
 ### ⚠️ Known Issues / Limitations
 
-- **Bullet Synchronization**: Bullets in multiplayer are not fully synchronized - needs refinement
 - **Global ESC Key Handling**: Need to sort out global [ESC] key behavior across all screens
-- **Level Progression**: Level progression in multiplayer is host-only (clients receive level updates but don't trigger progression)
-- **Full Game State Sync**: Full game state synchronization (scores, lives) still being refined
-- **Testing**: Extensive testing needed for multiplayer stability and edge cases
+- **Testing**: Extensive testing needed for multiplayer stability and edge cases (e.g. wider network/internet)
 
 ## Not Yet Implemented
 
 ❌ High score system  
 ❌ Option to restart multiplayer game with same players  
-❌ Level progression synchronization in multiplayer (currently host-only)  
 ❌ Power-ups or special abilities  
 ❌ Different bullet types  
 ❌ Boss hives or special enemies  
@@ -745,10 +763,13 @@ So what's left to do:
 
 ## Project Dependencies
 
-This project is built with the following dependencies:
+### Solution structure
+- **NSnipes** – Game client (Terminal UI, single-player and multiplayer). References `NSnipes.Core`.
+- **NSnipes.Core** – Shared game logic (Map, GameState, Player, Hive, Snipe, Bullet, `GameSimulation`). Used by the client for rendering and by the server for the simulation.
+- **NSnipes.GrpcServer** – gRPC server (game rooms, tick loop, state broadcast). References `NSnipes.Core`.
 
 ### Runtime Requirements
-- **.NET 10** - Required for both NSnipes game client and NSnipes.GrpcServer
+- **.NET 10** – Required for the game client and gRPC server
 
 ### NuGet Packages
 - **Terminal.Gui** (v2.0.0-develop.4828) - Modern console UI library https://github.com/gui-cs/Terminal.Gui
