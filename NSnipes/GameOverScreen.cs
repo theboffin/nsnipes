@@ -20,13 +20,16 @@ public class GameOverScreen : View
     private bool _isActive = false;
     private bool _bannerScrolling = false;
     private bool _waitingForEnter = false;
+    private bool _multiplayerSpectator = false;
+    private Func<List<PlayerScoreInfo>>? _getLiveScores = null;
+    private Func<bool>? _getIsAllPlayersDead = null;
     
     private DateTime _bannerStartTime;
     private int _bannerScrollPosition = 0;
     private List<PlayerScoreInfo> _playerScores = new List<PlayerScoreInfo>(5); // Max 5 players
     
     // Events
-    public event Action? OnReturnToIntro; // Called when ENTER is pressed to return to intro screen
+    public event Action? OnReturnToIntro; // Called when ENTER (or ESC in spectator mode) is pressed to return to intro screen
     
     // GAME OVER banner definition (7 rows tall, each letter is 7 characters wide)
     private static readonly string[] BannerG = new[]
@@ -119,11 +122,14 @@ public class GameOverScreen : View
         Visible = false; // Start hidden
     }
     
-    public void Show(List<PlayerScoreInfo> playerScores)
+    public void Show(List<PlayerScoreInfo> playerScores, bool multiplayerSpectator = false, Func<List<PlayerScoreInfo>>? getLiveScores = null, Func<bool>? getIsAllPlayersDead = null)
     {
         _isActive = true;
         _bannerScrolling = true;
         _waitingForEnter = false;
+        _multiplayerSpectator = multiplayerSpectator;
+        _getLiveScores = getLiveScores;
+        _getIsAllPlayersDead = getIsAllPlayersDead;
         _bannerStartTime = DateTime.Now;
         _bannerScrollPosition = 0;
         // Sort in-place to avoid LINQ ToList() allocation
@@ -139,6 +145,9 @@ public class GameOverScreen : View
         _isActive = false;
         _bannerScrolling = false;
         _waitingForEnter = false;
+        _multiplayerSpectator = false;
+        _getLiveScores = null;
+        _getIsAllPlayersDead = null;
         Visible = false;
         SetNeedsDraw();
     }
@@ -189,6 +198,21 @@ public class GameOverScreen : View
         }
         else if (_waitingForEnter)
         {
+            // In multiplayer spectator mode, refresh scores from callback so dead player sees live updates
+            if (_getLiveScores != null)
+            {
+                try
+                {
+                    var liveScores = _getLiveScores();
+                    if (liveScores != null && liveScores.Count > 0)
+                    {
+                        _playerScores = new List<PlayerScoreInfo>(liveScores.Count);
+                        _playerScores.AddRange(liveScores);
+                        _playerScores.Sort((a, b) => b.Score.CompareTo(a.Score));
+                    }
+                }
+                catch { /* ignore */ }
+            }
             DrawScreen(width, height);
         }
         
@@ -200,7 +224,19 @@ public class GameOverScreen : View
         if (!_isActive || !_waitingForEnter)
             return false;
         
-        // Only ENTER key returns to intro screen
+        // Multiplayer spectator: only ESC returns to menu (leave game)
+        if (_multiplayerSpectator)
+        {
+            if (key == Key.Esc)
+            {
+                Hide();
+                OnReturnToIntro?.Invoke();
+                return true;
+            }
+            return true; // Consume other keys
+        }
+        
+        // Single player / all dead: ENTER returns to intro screen
         if (key.ToString().Contains("Enter"))
         {
             Hide();
@@ -356,13 +392,19 @@ public class GameOverScreen : View
             }
         }
         
-        // Draw "Press ENTER" message at bottom
-        string enterMessage = "Press ENTER to continue";
-        int enterX = (width - enterMessage.Length) / 2;
-        int enterY = height - 2;
+        // Draw prompt at bottom: all dead message, ESC to leave in spectator mode, or ENTER otherwise
+        string promptMessage;
+        if (_multiplayerSpectator && _getIsAllPlayersDead != null && _getIsAllPlayersDead())
+            promptMessage = "Game is now over, all players are dead!  Press ESC to return to the menu";
+        else if (_multiplayerSpectator)
+            promptMessage = "Press ESC to leave game";
+        else
+            promptMessage = "Press ENTER to continue";
+        int promptX = (width - promptMessage.Length) / 2;
+        int promptY = height - 2;
         SetAttribute(new DrawingAttribute(Color.White, Color.Black));
-        Move(enterX, enterY);
-        foreach (char c in enterMessage)
+        Move(promptX, promptY);
+        foreach (char c in promptMessage)
         {
             AddRune(new System.Text.Rune(c));
         }

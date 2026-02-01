@@ -271,11 +271,11 @@ public class IntroScreen : View
         SetNeedsDraw();
     }
     
-    public void ShowGameOver(List<PlayerScoreInfo> playerScores)
+    public void ShowGameOver(List<PlayerScoreInfo> playerScores, bool multiplayerSpectator = false, Func<List<PlayerScoreInfo>>? getLiveScores = null, Func<bool>? getIsAllPlayersDead = null)
     {
         // Make IntroScreen visible so GameOverScreen (child view) can be rendered
         Visible = true;
-        _gameOverScreen.Show(playerScores);
+        _gameOverScreen.Show(playerScores, multiplayerSpectator, getLiveScores, getIsAllPlayersDead);
         SetNeedsDraw();
     }
     

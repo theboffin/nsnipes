@@ -12,7 +12,23 @@ So this will be a 'stylised' version.  It's also 'my' version because I'm not tr
 
 This is an exercise in programming and networking as much as it is a journey into my distant memories.
 
-![Example NSnipes Game](./nsnipes-animation.gif)
+![Intro Screen](./images/nsnipes_intro.gif)
+
+![Example NSnipes Game](./images/nsnipes-animation.gif)
+
+Your player looks like this:
+![Player](./images/nsnipes_player.gif)
+
+Cute, eh?  Well you can assign your own initials to your player which helps other players in a multiplayer game to identify who is shooting at them!!
+
+Your objective:
+![Hive & Snipes](./images/nsnipes_hive_snipes.gif)
+
+Kill snipes the cute little characters aimlessly walking around (I say aimlessly, but if they sniff you out being close by they will try to get to you),  and destroy the hives, the little flashing squares that you see.  Hives contain snipes, so kill those and you're in for a boat load of points!
+
+![Multiplayer](./images/nsnipes_multiplayer.gif)
+
+Home in on other players, and get 1000 points for destroying another player!
 
 ## Building and Running
 
@@ -119,13 +135,16 @@ Build the solution first with `./build.sh` or `.\build.ps1` when needed (e.g. af
 - The **server** (not the host) is the game authority: it runs the simulation and broadcasts state; all clients send only input (move/fire) and render the state they receive
 - All players can move and shoot independently; bullets, snipes, hives, level, and scores are synchronized in real-time from the server
 - **Player-vs-player (PvP)**: In multiplayer, players can shoot each other. If your bullet hits another player, they die, lose a life, and respawn at a random position if they have lives left; you gain **1000 points** for the kill. All of the shot player's bullets vanish when they die.
+- **When you lose all lives**: You see the game over screen with all players' scores, which update live while others are still playing. Only **ESC** is offered (to leave the game and return to the menu). Dead players disappear from the maze for everyone else.
+- **When all players have lost all lives**: Anyone still on the game over screen sees *"Game is now over, all players are dead! Press ESC to return to the menu"*. The client stops receiving server updates at that point; pressing **ESC** returns to the main menu.
 - When all players leave (gracefully or by disconnect), the server abandons the game and frees the room
 - If the host disconnects, the game may become unstable (host migration not yet implemented)
 
-![Intro Screen](./nsnipes-intro.png)
-The 'Intro Screen' will change quite a bit as multi-player gaming is added
+![Intro Screen](./images/nsnipes-intro.png)
 
-![Game Play](./nsnipes-game.png)
+The 'Intro Screen' offers some cute animate of players and snipes, while offering relevant menu choices and showing you the active status of the server.
+
+![Game Play](./images/nsnipes-game.png)
 Game play, your player remains central - as you move the map moves around you and is endlessly scrolling. i.e. if you go off the top of the map you seemlessly rejoin the bottom - the map feels massive.  Hives release snipes,  and snipes will wander around the maze, but be careful, as soon as they get a sniff of you, they'll start to home in on you.
 
 You can shoot snipes, you have bullets that can be shot in any direction and will bounce off walls too!   You can shoot hives, though it will take 3 shots to destroy a hive - hives are valuable to shoot, as you'll gain points for shooting the hive plus points for all of the un-released snipes within the hive -- shoot them quickly to gain more points! In **multiplayer**, you can also shoot other players: the shot player dies, loses a life, and respawns if they have lives left; you gain 1000 points per kill, and all of that player's bullets vanish.
@@ -181,6 +200,7 @@ So what's left to do:
   - ✅ Player-vs-player (PvP): players can shoot each other; shot player dies, loses a life, respawns if lives left; shooter gets 1000 points; dead player's bullets vanish
   - ✅ Player visibility and hive synchronization; joining player map fix (wait for first snapshot)
   - ✅ Multiplayer game end/results screen; server abandons game when all players leave
+  - ✅ Multiplayer game over per player: when you lose all lives you see game over with live-updating scores and ESC to leave; when all players are dead, prompt shows "Game is now over, all players are dead! Press ESC to return to the menu" and client stops polling
   - ✅ Server configuration UI (configure server address/port, status display)
   - ❌ Option to restart another game with all the same players
   - ⚠️ Extensive testing for multiplayer stability and wider network/internet
@@ -189,7 +209,7 @@ So what's left to do:
   - ⚠️ Optional: refactor single-player to use `NSnipes.Core.GameSimulation` locally (same logic as server)
 - Technical
   - ✅ Terminal.Gui v2, .NET 10, zero warnings
-  - ⚠️ Fix global [ESC] key handling across all screens
+  - ✅ Fix global [ESC] key handling across all screens
 
 ## TO-DO
 
@@ -237,12 +257,13 @@ So what's left to do:
   - "X Lives Left" when player loses a life (but still has lives remaining)
 
 **Game Over Screen**
-- When all players lose all lives, animated "GAME OVER" banner scrolls in from the left
+- When all players lose all lives (single player) or when **you** lose all lives (multiplayer), animated "GAME OVER" banner scrolls in from the left
 - Banner displays "GAME OVER" with space between words (white block text on blue background)
 - Shows "-< SCORES >-" header followed by player scores sorted by score (descending)
 - Top player displayed in cyan, all other players in yellow
-- Game stops (no movement, bullets, snipes)
-- Press ENTER to return to the intro screen
+- **Single player**: Game stops; press **ENTER** to return to the intro screen
+- **Multiplayer (you died, others may still be playing)**: Scores update live while the game continues; only **Press ESC to leave game** is shown. Dead players disappear from the maze for others.
+- **Multiplayer (all players dead)**: Prompt changes to *"Game is now over, all players are dead! Press ESC to return to the menu"*; client stops polling the server; press **ESC** to return to the main menu
 - Game state is fully reset when starting a new game after game over
 
 ### Current Features
@@ -314,7 +335,7 @@ So what's left to do:
 
 **Status Bar**
 - Two rows at the top of the screen with dark blue background and white text
-- Displays: Hives (remaining/total), Snipes (remaining/total), Lives, Level, and Score
+- Displays: Hives (remaining/total), Snipes (remaining/total), Lives, Level, and Score; in multiplayer, Game ID is shown on the right
 - Status bar is updated periodically and shows current game state
 
 **Game State**
@@ -379,6 +400,7 @@ So what's left to do:
 ### Server-authoritative multiplayer & stability (Latest)
 - **Server-authoritative architecture**: Game logic lives in `NSnipes.Core` (Map, GameState, Player, Hive, Snipe, Bullet, `GameSimulation`). The gRPC server runs the simulation in a tick loop; clients send **input only** (move/fire) and render **state only** (snapshots from the server). Bullets, snipes, hives, level, and scores are fully synchronized from the server.
 - **Player-vs-player (PvP)**: In multiplayer, players can shoot each other. When a bullet hits another player (server-authoritative): the shot player dies, loses a life, and respawns at a random position if they have lives left; the shooter is awarded **1000 points**; all bullets owned by the shot player are removed instantly.
+- **Multiplayer game over (per player)**: When a player loses all lives, that player immediately sees the game over screen with all players' scores updating live while others keep playing; only **ESC** is offered to leave and return to the menu. Dead players disappear from the maze for other players. When **all** players have lost all lives, anyone still on the game over screen sees *"Game is now over, all players are dead! Press ESC to return to the menu"*; the client then stops polling the server (disconnects) so scores no longer change.
 - **Joining player map fix**: The joining client no longer draws the map until it has received at least one game state snapshot with its position, avoiding a broken/misaligned map and invisible walls. A "Syncing game state..." message is shown until then. The draw path also uses a single captured viewport per frame to avoid torn reads when snapshots update position mid-draw.
 - **Collection-modified crash fix**: Multiplayer could crash with "Collection was modified; enumeration operation may not execute" when the network thread updated hives/snipes/bullets/players while the UI thread was drawing them. All such updates are now under a lock, and all draw/iteration code takes a snapshot of the collection under that lock and iterates the snapshot.
 - **Server cleanup when all players leave**: When every player disconnects (gracefully or not), the server stops the game simulation and removes the room, freeing resources and avoiding errors from writing to closed streams.
@@ -542,9 +564,10 @@ So what's left to do:
 - **Banner Spacing**: Space between "GAME" and "OVER" words for better readability
 - **Player Scores Display**: Shows all players sorted by score (descending) with "-< SCORES >-" header
 - **Visual Hierarchy**: Top player displayed in cyan, all other players in yellow
-- **Key Handling**: ENTER key returns to intro screen (other keys ignored)
+- **Single player**: ENTER returns to intro screen
+- **Multiplayer (spectator)**: When you lose all lives, you see game over with live-updating scores; only ESC to leave game. When all players are dead, prompt shows "Game is now over, all players are dead! Press ESC to return to the menu" and client stops receiving server updates
 - **Code Organization**: Moved game over screen to separate `GameOverScreen` class for better separation of concerns
-- **Multiplayer Support**: Game over triggers when ALL players lose all lives, showing all player scores
+- **Multiplayer Support**: Game over shows per player when they die (spectator mode); when all players are dead, final prompt and stop polling
 
 ### Multiplayer Implementation
 - **gRPC Networking**: Full multiplayer support using gRPC (replaced MQTT)
@@ -607,7 +630,7 @@ So what's left to do:
 - **Hive System**: Implemented hives that spawn snipes, with visual representation (glowing cyan/green boxes)
 - **Snipe System**: Implemented intelligent snipes with two types ('A' and 'B'), movement AI, and collision detection
 - **Bullet System**: Implemented player shooting with 8-directional firing, wall bouncing, and lifetime management
-- **Status Bar**: Two-row status display showing game statistics (hives, snipes, lives, level, score)
+- **Status Bar**: Two-row status display showing game statistics (hives, snipes, lives, level, score); in multiplayer, Game ID on the right
 
 ### Player Mechanics
 - **Player Lives**: Player starts with 5 lives
@@ -678,8 +701,8 @@ So what's left to do:
 ✅ Menu system with navigation  
 ✅ Initials input and persistence (saved to nsnipes.json)  
 ✅ Clearing effect animations (game start, respawn, level start)  
-✅ Status bar display (hives, snipes, lives, level, score)  
-✅ **Game over screen** (animated "GAME OVER" banner, player scores with "-< SCORES >-" header, ENTER to return)  
+✅ Status bar display (hives, snipes, lives, level, score; Game ID on right in multiplayer)  
+✅ **Game over screen** (animated "GAME OVER" banner, player scores with "-< SCORES >-" header; single player: ENTER to return; multiplayer: ESC to leave / all-dead prompt and stop polling)  
 ✅ Multiplayer waiting screen with player count and join notifications  
 
 ### Game Systems
@@ -689,7 +712,7 @@ So what's left to do:
 ✅ **Level start screen** (animated clearing with level info: "LEVEL n - x HIVES with y SNIPES")  
 ✅ Scoring system (25 points per snipe, 500 + 25 per unreleased snipe for hives)  
 ✅ Game reset functionality (fully resets when starting new game after game over)  
-✅ **Game over screen** (animated banner, player scores display, ENTER to return)  
+✅ **Game over screen** (animated banner, player scores display; single player: ENTER to return; multiplayer: spectator mode with ESC, all-dead prompt and stop polling)  
 ✅ Player initials customization  
 ✅ Configuration persistence (initials saved between sessions)  
 
@@ -734,6 +757,10 @@ So what's left to do:
 **Game State Synchronization**
 - Hives, snipes, bullets, level, and scores are server-authoritative; all clients render the same state from snapshots
 - Game starts when max players join or 60s elapse; server abandons the game and frees the room when all players leave
+
+**Multiplayer game over**
+- When you lose all lives: game over screen with live-updating scores; only ESC to leave. Dead players disappear from the maze for others.
+- When all players are dead: prompt changes to "Game is now over, all players are dead! Press ESC to return to the menu"; client disconnects and stops polling
 
 **Technical Implementation**
 - **gRPC Server**: Dedicated server (`NSnipes.GrpcServer`) manages all multiplayer connections

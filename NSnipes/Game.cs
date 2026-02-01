@@ -77,14 +77,6 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     private string[]? _cachedMapViewport = null;
     private DateTime _cachedDateTime = DateTime.MinValue;
     
-    // Frame rate tracking using circular buffer for better performance
-    private DateTime _lastFrameTime = DateTime.Now;
-    private double _currentFPS = 0.0;
-    private readonly double[] _fpsHistory = new double[FpsHistorySize];
-    private int _fpsHistoryIndex = 0;
-    private int _fpsHistoryCount = 0; // Track how many entries are valid
-    private const int FpsHistorySize = 10; // Average over last 10 frames
-    
     // Cached DateTime for current frame/update cycle to avoid excessive DateTime.Now calls
     private DateTime _currentFrameTime = DateTime.Now;
 
@@ -99,6 +91,10 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     private bool _isMultiplayer = false;
     /// <summary>True after we've received at least one GameStateSnapshot that set our position (avoids broken map for joining player).</summary>
     private bool _hasReceivedMultiplayerSnapshot = false;
+    /// <summary>True after we've shown game over for this client's death in multiplayer (so we only show once).</summary>
+    private bool _hasShownGameOverForLocalDeath = false;
+    /// <summary>True when all players in the multiplayer game have lost all lives (stops polling, shows final prompt).</summary>
+    private bool _allPlayersDeadInMultiplayer = false;
     private int _positionSequence = 0; // Sequence number for position updates
     private DateTime _lastPositionPublish = DateTime.Now;
     private const int PositionPublishThrottleMs = 20; // Publish position every 20ms when moved for smoother updates
@@ -146,15 +142,25 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             // Reset game state when returning to intro screen
             _mapDrawn = false;
             _pressedKeys.Clear(); // Clear any lingering pressed keys
-            // Disconnect from multiplayer if connected
+            // Notify server that player is leaving, then disconnect
             if (_grpcClient != null)
             {
+                if (_gameSession != null)
+                {
+                    try
+                    {
+                        _grpcClient.SendLeaveGameAsync(_gameSession.GameId, _gameSession.PlayerId).Wait(TimeSpan.FromSeconds(2));
+                    }
+                    catch { /* best-effort; server will also see stream close */ }
+                }
                 _grpcClient.Dispose();
                 _grpcClient = null;
             }
             _gameSession = null;
             _isMultiplayer = false;
             _hasReceivedMultiplayerSnapshot = false;
+            _hasShownGameOverForLocalDeath = false;
+            _allPlayersDeadInMultiplayer = false;
             _networkPlayers.Clear();
         };
         _introScreen.OnStartMultiplayerGame += async (maxPlayers) =>
@@ -863,9 +869,6 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         // Don't draw if in intro screen or game over
         if (_introScreen.IsActive || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
             return;
-            
-        // Track frame rate
-        UpdateFrameRate();
 
         DrawPlayerWithClearing();
         DrawRemotePlayersWithClearing(); // Draw remote players with clearing for smooth movement
@@ -873,36 +876,6 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         // Hives and snipes are drawn on their own timers for better performance
     }
     
-    private void UpdateFrameRate()
-    {
-        double elapsedMs = (_currentFrameTime - _lastFrameTime).TotalMilliseconds;
-        
-        if (elapsedMs > 0)
-        {
-            // Calculate FPS for this frame
-            double frameFPS = 1000.0 / elapsedMs;
-            
-            // Add to circular buffer
-            _fpsHistory[_fpsHistoryIndex] = frameFPS;
-            _fpsHistoryIndex = (_fpsHistoryIndex + 1) % FpsHistorySize;
-            if (_fpsHistoryCount < FpsHistorySize)
-                _fpsHistoryCount++;
-            
-            // Calculate average FPS using circular buffer
-            if (_fpsHistoryCount > 0)
-            {
-                double sum = 0.0;
-                for (int i = 0; i < _fpsHistoryCount; i++)
-                {
-                    sum += _fpsHistory[i];
-                }
-                _currentFPS = sum / _fpsHistoryCount;
-            }
-        }
-        
-        _lastFrameTime = _currentFrameTime;
-    }
-
     private void DrawPlayerWithClearing()
     {
         // Clear previous player position before drawing new position
@@ -3235,6 +3208,20 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         }
     }
     
+    /// <summary>Builds current player scores from network state (used for game over screen; call under lock or from UI thread).</summary>
+    private List<PlayerScoreInfo> BuildPlayerScoresFromNetwork()
+    {
+        lock (_gameStateLock)
+        {
+            var list = new List<PlayerScoreInfo>(_networkPlayers.Count);
+            foreach (var np in _networkPlayers.Values)
+            {
+                list.Add(new PlayerScoreInfo { Initials = np.Initials, Score = np.Score });
+            }
+            return list;
+        }
+    }
+    
     private void StartNextLevel()
     {
         // Advance to next level
@@ -3388,8 +3375,6 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     {
         // In Terminal.Gui v2, OnDrawingContent clears the view each time,
         // so we must redraw the status bar every frame (no caching optimization)
-        int currentFPS = (int)Math.Round(_currentFPS);
-        
         int currentWidth = Frame.Width;
 
         // Set status bar color: white text on blue background
@@ -3424,18 +3409,21 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         string scoreText = $"Score: {_gameState.Score}  ";
         this.AddString(scoreText);
 
-        // Draw FPS (currentFPS already calculated at top of method)
-        string fpsText = $"FPS: {currentFPS}";
-        this.AddString(fpsText);
-
-        // Calculate current cursor position
-        int currentPos = 2 + hivesText.Length + snipesText.Length + livesText.Length + 
-                        levelText.Length + scoreText.Length + fpsText.Length;
-        
-        // Clear rest of first row
-        if (currentPos < currentWidth)
+        // Left-side length; right side shows GameId in multiplayer
+        int leftLength = 2 + hivesText.Length + snipesText.Length + livesText.Length + levelText.Length + scoreText.Length;
+        string gameIdText = "";
+        if (_isMultiplayer && _gameSession != null && !string.IsNullOrEmpty(_gameSession.GameId))
         {
-            this.AddString(new string(' ', currentWidth - currentPos));
+            gameIdText = $" {_gameSession.GameId} ";
+        }
+        int rightLength = gameIdText.Length;
+        int fillLength = currentWidth - leftLength - rightLength;
+        if (fillLength > 0)
+            this.AddString(new string(' ', fillLength));
+        if (rightLength > 0)
+        {
+            SetAttribute(new DrawingAttribute(Color.White, Color.Blue));
+            this.AddString(gameIdText);
         }
 
         // Draw second row with bottom of hive
@@ -3497,6 +3485,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         {
             if (networkPlayer.IsLocal)
                 continue; // Skip local player (already drawn)
+            if (!networkPlayer.IsAlive)
+                continue; // Dead players disappear from the maze for other players
             
             // Calculate delta between remote player and local player world positions, handling wrapping
             int deltaX = networkPlayer.X - _player.X;
@@ -3579,6 +3569,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         {
             if (networkPlayer.IsLocal)
                 continue; // Skip local player (already drawn)
+            if (!networkPlayer.IsAlive)
+                continue; // Dead players disappear from the maze for other players
             
             // Calculate delta between remote player and local player world positions, handling wrapping
             int deltaX = networkPlayer.X - _player.X;
@@ -3791,6 +3783,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             };
             
             _isMultiplayer = true;
+            _hasShownGameOverForLocalDeath = false;
+            _allPlayersDeadInMultiplayer = false;
             
             // Add host as first player
             var hostPlayer = new NetworkPlayerInfo
@@ -3907,6 +3901,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             };
             
             _isMultiplayer = true;
+            _hasShownGameOverForLocalDeath = false;
+            _allPlayersDeadInMultiplayer = false;
             
             // Start game stream - this must happen before we can receive player join notifications
             bool streamStarted = await _grpcClient.StartGameStreamAsync(_gameSession.GameId, _gameSession.PlayerId);
@@ -4197,6 +4193,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
             return;
         
         // Client receives game state snapshot from host
+        bool showGameOverForLocalDeath = false;
+        bool allDeadDetected = false;
         try
         {
             lock (_gameStateLock)
@@ -4319,6 +4317,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                             _player.Lives = playerState.Lives;
                             _player.Score = playerState.Score;
                             _player.IsAlive = playerState.IsAlive;
+                            _gameState.Score = playerState.Score; // Status bar reads _gameState.Score
                             // Update local player initials too
                             if (!string.IsNullOrEmpty(playerState.Initials))
                             {
@@ -4379,6 +4378,7 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                                 _player.Lives = playerState.Lives;
                                 _player.Score = playerState.Score;
                                 _player.IsAlive = playerState.IsAlive;
+                                _gameState.Score = playerState.Score; // Status bar reads _gameState.Score
                                 if (!string.IsNullOrEmpty(playerState.Initials))
                                 {
                                     _player.Initials = playerState.Initials;
@@ -4393,6 +4393,52 @@ public class Game : Window, Terminal.Gui.App.IRunnable
                 // Force map redraw to show hives and players
                 _cachedMapViewport = null;
                 _mapDrawn = false;
+                
+                // Multiplayer: show game over for this client when local player reaches 0 lives (once)
+                if (_isMultiplayer && _gameSession != null && _player.Lives <= 0 && !_hasShownGameOverForLocalDeath)
+                {
+                    _hasShownGameOverForLocalDeath = true;
+                    showGameOverForLocalDeath = true;
+                }
+                
+                // Multiplayer: detect when all players have lost all lives (stop polling, show final prompt)
+                if (_isMultiplayer && snapshot.Players != null && snapshot.Players.Count > 0)
+                {
+                    bool allDead = true;
+                    foreach (var p in snapshot.Players)
+                    {
+                        if (p != null && p.Lives > 0) { allDead = false; break; }
+                    }
+                    if (allDead && !_allPlayersDeadInMultiplayer)
+                    {
+                        _allPlayersDeadInMultiplayer = true;
+                        allDeadDetected = true;
+                    }
+                }
+            }
+            
+            if (showGameOverForLocalDeath && _app.TimedEvents != null)
+            {
+                _app.TimedEvents.Add(TimeSpan.Zero, () =>
+                {
+                    var scores = BuildPlayerScoresFromNetwork();
+                    _introScreen.ShowGameOver(scores, multiplayerSpectator: true, getLiveScores: BuildPlayerScoresFromNetwork, getIsAllPlayersDead: () => _allPlayersDeadInMultiplayer);
+                    return false; // One-time
+                });
+            }
+            
+            // When all players are dead, disconnect so we stop receiving server updates
+            if (allDeadDetected && _app.TimedEvents != null)
+            {
+                _app.TimedEvents.Add(TimeSpan.Zero, () =>
+                {
+                    if (_allPlayersDeadInMultiplayer && _grpcClient != null)
+                    {
+                        _grpcClient.Dispose();
+                        _grpcClient = null;
+                    }
+                    return false; // One-time
+                });
             }
         }
         catch (Exception)

@@ -316,6 +316,21 @@ public class GameServiceImplementation : GameService.GameServiceBase
                             continue;
                         }
 
+                        // Client notified server that player is leaving (e.g. pressed ESC)
+                        if (message.PlayerLeave != null)
+                        {
+                            room.RemovePlayer(playerId);
+                            _playerToRoom.TryRemove(playerId, out _);
+                            _logger.LogInformation("Player {PlayerId} left game {GameId} (explicit leave)", playerId, gameId);
+                            if (room.CurrentPlayers == 0)
+                            {
+                                room.StopSimulation();
+                                _roomManager.RemoveRoom(gameId);
+                                _logger.LogInformation("Game {GameId} abandoned (all players left). Room removed.", gameId);
+                            }
+                            return; // Exit read loop; stream will close and finally will run (RemovePlayer is idempotent)
+                        }
+
                         // Relay other messages (gameStart, playerJoin, etc.) for backward compatibility
                         await room.BroadcastMessageAsync(message, playerId);
                     }

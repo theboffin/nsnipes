@@ -313,6 +313,19 @@ public class GrpcGameClient : IDisposable
         return await SendGameMessageAsync(message);
     }
 
+    /// <summary>Notify server that the player is leaving the game (e.g. pressed ESC). Server removes the player and abandons the game if no players remain.</summary>
+    public async Task<bool> SendLeaveGameAsync(string gameId, string playerId)
+    {
+        var message = new GameMessage
+        {
+            GameId = gameId,
+            PlayerId = playerId,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            PlayerLeave = new PlayerLeave()
+        };
+        return await SendGameMessageAsync(message);
+    }
+
     public async Task<bool> SendGameMessageAsync(GameMessage message)
     {
         if (message == null)
@@ -352,6 +365,7 @@ public class GrpcGameClient : IDisposable
     private string GetMessageType(GameMessage message)
     {
         if (message.PlayerInput != null) return "playerInput";
+        if (message.PlayerLeave != null) return "playerLeave";
         if (message.Position != null) return "position";
         if (message.Bullet != null) return "bullet";
         if (message.State != null) return "state";

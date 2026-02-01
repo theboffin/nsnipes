@@ -25,6 +25,8 @@ message GameMessage {
   oneof message {
     // Client -> Server: player input (move/fire)
     PlayerInput playerInput = 9;
+    // Client -> Server: player is leaving the game (ESC / return to menu)
+    PlayerLeave playerLeave = 20;
     // Player messages (legacy, may be used for compatibility)
     PlayerPositionUpdate position = 10;
     PlayerRespawnMessage respawn = 11;
@@ -47,6 +49,9 @@ message PlayerInput {
   int32 fireDx = 3;
   int32 fireDy = 4;
 }
+
+// Client notifies server that player is leaving the game (e.g. pressed ESC)
+message PlayerLeave {}
 
 // Game creation and joining
 message CreateGameRequest {
