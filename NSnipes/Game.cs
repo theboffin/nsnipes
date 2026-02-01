@@ -499,7 +499,8 @@ public class Game : Window, Terminal.Gui.App.IRunnable
 
         // Handle bullet firing (q, w, e, a, d, z, x, c)
         // Player is PlayerWidth columns wide [X, X+1] and PlayerHeight rows tall [Y, Y+1, Y+2]
-        if (_bullets.Count < MaxBullets)
+        // In multiplayer, always send fire input; server enforces MaxBullets. In single-player, check local count.
+        if (_isMultiplayer || _bullets.Count < MaxBullets)
         {
             double startX = 0;
             double startY = 0;

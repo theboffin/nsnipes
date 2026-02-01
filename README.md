@@ -16,27 +16,37 @@ This is an exercise in programming and networking as much as it is a journey int
 
 ## Building and Running
 
+### Build
+
+To build the full solution, run:
+
+**Linux/macOS (Bash):**
+```bash
+./build.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\build.ps1
+```
+
+Do this after pulling changes or when you want a clean build. For multi-terminal multiplayer (e.g. several clients), build once then run multiple clients or servers as needed.
+
 ### Starting the gRPC Server
 
 The multiplayer game requires a gRPC server to be running. Start it first:
 
 **Linux/macOS (Bash):**
 ```bash
-# Run without rebuilding
 ./run-server.sh
-
-# Build and run
-./run-server.sh -build
 ```
 
 **Windows (PowerShell):**
 ```powershell
-# Run without rebuilding
 .\run-server.ps1
-
-# Build and run
-.\run-server.ps1 -build
 ```
+
+To use a different port, set the `PORT` environment variable (e.g. `PORT=5001 ./run-server.sh`).
 
 The server will start on `http://0.0.0.0:5000` by default (listening on all network interfaces). **Note**: While the server binds to `0.0.0.0`, clients should connect to `http://127.0.0.1:5000` or `http://localhost:5000` (not `0.0.0.0`). The default client configuration uses `127.0.0.1:5000`. You can configure the server address and port in the client via the "Configure Server" menu option.
 
@@ -45,30 +55,16 @@ The server will start on `http://0.0.0.0:5000` by default (listening on all netw
 Use the provided scripts to run the game:
 
 **Linux/macOS (Bash):**
-
-**Run without rebuilding** (uses already-built executable):
 ```bash
 ./run.sh
 ```
 
-**Build and run** (rebuilds before running):
-```bash
-./run.sh -build
-```
-
 **Windows (PowerShell):**
-
-**Run without rebuilding** (uses already-built executable):
 ```powershell
 .\run.ps1
 ```
 
-**Build and run** (rebuilds before running):
-```powershell
-.\run.ps1 -build
-```
-
-**Note**: The default behavior (without `-build` flag) runs the game without rebuilding, which is useful for multiplayer testing where you want to build in one terminal and run in multiple terminals without rebuilding each time.
+Build the solution first with `./build.sh` or `.\build.ps1` when needed (e.g. after pulling changes or when running multiple clients).
 
 ## Starting a Game
 
@@ -508,7 +504,7 @@ So what's left to do:
   - **Protocol Buffers**: All game messages defined in `game.proto` for efficient binary serialization
 - **Server Scripts**: Added `run-server.sh` and `run-server.ps1` for easy server startup
   - Default server address: `http://127.0.0.1:5000` (clients connect to `127.0.0.1:5000`, server binds to `0.0.0.0:5000`)
-  - Same `-build` flag support as client scripts
+  - Run scripts only run (no build option); use `build.sh` / `build.ps1` to build the full solution
 - **Improved Latency**: gRPC's binary protocol and HTTP/2 provide significantly lower latency than MQTT
 - **Type Safety**: Protocol buffers provide compile-time type checking for all game messages
 - **Better Error Handling**: Structured error responses and connection management
@@ -516,15 +512,10 @@ So what's left to do:
 - **Game Room Management**: Server manages game rooms, player connections, and message routing
 - **Backward Compatibility**: Single-player mode unchanged (no network required)
 
-### Build Script Enhancement
-- **run.sh Script Update**: Modified `run.sh` to support optional building
-  - Default behavior: `./run.sh` runs without rebuilding (uses `--no-build` flag)
-  - Build flag: `./run.sh -build` rebuilds the project before running
-  - Useful for multiplayer testing: build once in one terminal, run in multiple terminals without rebuilding
-- **run.ps1 Script Added**: Created PowerShell version for Windows compatibility
-  - Default behavior: `.\run.ps1` runs without rebuilding (uses `--no-build` flag)
-  - Build flag: `.\run.ps1 -build` rebuilds the project before running
-  - Same functionality as `run.sh` for cross-platform support
+### Build and Run Scripts
+- **Build scripts**: `build.sh` (Linux/macOS) and `build.ps1` (Windows) build the complete solution (`NSnipes.sln`)
+- **Run scripts**: `run.sh` / `run.ps1` run the game client only; `run-server.sh` / `run-server.ps1` run the gRPC server only (no build option)
+- Workflow: run the build script when needed (e.g. after pulling changes or before multi-terminal testing), then use run/run-server as needed
 
 ### Bug Fixes (Latest)
 - **Snipe Count Display Fix**: Fixed incorrect snipe count display (was showing 80/40 instead of 40/40)

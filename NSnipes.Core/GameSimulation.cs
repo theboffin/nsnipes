@@ -191,6 +191,30 @@ public class GameSimulation
         return true;
     }
 
+    /// <summary>Enumerates map cells (wrapped) that the line segment from (x0,y0) to (x1,y1) passes through, to prevent bullet tunneling.</summary>
+    private static IEnumerable<(int mapX, int mapY)> GetCellsAlongSegment(Map map, double x0, double y0, double x1, double y1)
+    {
+        double dx = x1 - x0;
+        double dy = y1 - y0;
+        double len = Math.Sqrt(dx * dx + dy * dy);
+        if (len <= 0) yield break;
+        int steps = Math.Max(1, (int)Math.Ceiling(len));
+        var seen = new HashSet<(int, int)>();
+        for (int s = 0; s <= steps; s++)
+        {
+            double t = steps == 0 ? 1 : (double)s / steps;
+            double x = x0 + t * dx;
+            double y = y0 + t * dy;
+            int cx = (int)Math.Floor(x);
+            int cy = (int)Math.Floor(y);
+            int wx = map.WrapX(cx);
+            int wy = map.WrapY(cy);
+            var key = (wx, wy);
+            if (seen.Add(key))
+                yield return key;
+        }
+    }
+
     private void UpdateBullets()
     {
         for (int i = _bullets.Count - 1; i >= 0; i--)
@@ -206,14 +230,25 @@ public class GameSimulation
             double prevY = bullet.Y;
             bullet.Update();
 
-            int bulletMapX = _map.WrapX((int)Math.Round(bullet.X));
-            int bulletMapY = _map.WrapY((int)Math.Round(bullet.Y));
-
-            if (_map.IsValidCoordinate(bulletMapX, bulletMapY) && !_map.IsWalkable(bulletMapX, bulletMapY))
+            // Check every cell the bullet passes through (prevents tunneling); skip start cell so we only bounce when entering a new wall
+            int startCellX = _map.WrapX((int)Math.Floor(prevX));
+            int startCellY = _map.WrapY((int)Math.Floor(prevY));
+            bool hitWall = false;
+            char hitCellChar = ' ';
+            foreach (var (mapX, mapY) in GetCellsAlongSegment(_map, prevX, prevY, bullet.X, bullet.Y))
             {
-                char cell = _map.FullMap[bulletMapY][bulletMapX];
-                bool isHorizontalWall = cell == '═' || cell == '─' || cell == '╦' || cell == '╩' || cell == '╬';
-                bool isVerticalWall = cell == '║' || cell == '│' || cell == '╣' || cell == '╠';
+                if (mapX == startCellX && mapY == startCellY) continue;
+                if (!_map.IsValidCoordinate(mapX, mapY) || _map.IsWalkable(mapX, mapY))
+                    continue;
+                hitWall = true;
+                hitCellChar = _map.FullMap[mapY][mapX];
+                break;
+            }
+
+            if (hitWall)
+            {
+                bool isHorizontalWall = hitCellChar == '═' || hitCellChar == '─' || hitCellChar == '╦' || hitCellChar == '╩' || hitCellChar == '╬';
+                bool isVerticalWall = hitCellChar == '║' || hitCellChar == '│' || hitCellChar == '╣' || hitCellChar == '╠';
                 if (isHorizontalWall) bullet.BounceY();
                 else if (isVerticalWall) bullet.BounceX();
                 else
@@ -224,7 +259,13 @@ public class GameSimulation
                 }
                 bullet.X = prevX;
                 bullet.Y = prevY;
+                // Nudge bullet away from wall so next tick we don't immediately re-enter the same wall (avoids stuck/oscillation in corners)
+                bullet.X += bullet.VelocityX * 0.2;
+                bullet.Y += bullet.VelocityY * 0.2;
             }
+
+            int bulletMapX = _map.WrapX((int)Math.Round(bullet.X));
+            int bulletMapY = _map.WrapY((int)Math.Round(bullet.Y));
 
             bool removed = false;
             for (int j = _snipes.Count - 1; j >= 0 && !removed; j--)

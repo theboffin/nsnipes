@@ -150,14 +150,17 @@ public class Map
         else if (deltaY < -MapHeight / 2) deltaY += MapHeight;
     }
 
+    /// <summary>Returns true if (x,y) is within map bounds. Uses actual row length for x (rows may differ).</summary>
     public bool IsValidCoordinate(int x, int y) =>
-        x >= 0 && x < MapWidth && y >= 0 && y < MapHeight;
+        y >= 0 && y < MapHeight && x >= 0 && x < FullMap[y].Length;
 
     /// <summary>Returns true if the cell is walkable (space).</summary>
     public bool IsWalkable(int x, int y)
     {
         if (!IsValidCoordinate(x, y)) return false;
-        return FullMap[y][x] == ' ';
+        string row = FullMap[y];
+        if (x >= row.Length) return false; // rows may be shorter than MapWidth (row 0)
+        return row[x] == ' ';
     }
 
     public string[] GetMap(int frameWidth, int frameHeight, int x, int y)
