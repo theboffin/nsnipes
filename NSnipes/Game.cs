@@ -681,66 +681,48 @@ public class Game : Window, Terminal.Gui.App.IRunnable
     }
 
     /// <summary>
-    /// Checks if player can move to the specified viewport position
+    /// Checks if the player can move to the given world position using map walkability (same logic as server).
+    /// Ensures client collision matches server and is independent of viewport alignment.
     /// </summary>
-    private bool CanMoveTo(int newTopLeftCol, int newTopLeftRow, int topLeftCol, int topLeftRow, 
-                           string[] map, int frameWidth, int frameHeight)
+    private bool CanMoveToWorld(int newWorldX, int newWorldY)
     {
-        // Helper function to check if a cell is walkable (space)
-        // Note: Cannot use 'in' parameter in local function, so map is passed by value
-        bool IsWalkable(int row, int col)
+        newWorldX = _map.WrapX(newWorldX);
+        newWorldY = _map.WrapY(newWorldY);
+
+        // Check every cell the player would occupy (2 wide x PlayerHeight tall), using wrapped coords so edge wrap works
+        for (int dy = 0; dy < PlayerHeight; dy++)
+        for (int dx = 0; dx < PlayerWidth; dx++)
         {
-            if (row < 0 || row >= frameHeight || col < 0 || col >= frameWidth)
+            int cx = _map.WrapX(newWorldX + dx);
+            int cy = _map.WrapY(newWorldY + dy);
+            if (!_map.IsWalkable(cx, cy))
                 return false;
-            return map?[row][col] == ' ';
         }
 
-        // Check walls first
-        if (!IsWalkable(newTopLeftRow, newTopLeftCol) ||
-            !IsWalkable(newTopLeftRow, newTopLeftCol + 1) ||
-            !IsWalkable(newTopLeftRow + 1, newTopLeftCol) ||
-            !IsWalkable(newTopLeftRow + 1, newTopLeftCol + 1) ||
-            !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol) ||
-            !IsWalkable(newTopLeftRow + (PlayerHeight - 1), newTopLeftCol + 1))
-        {
-            return false;
-        }
-        
-        // Check player-to-player collision in multiplayer
+        // Check player-to-player collision in multiplayer (cell-based, wrapped, same as server)
         if (_isMultiplayer && _gameSession != null)
         {
-            // Calculate new world position from viewport delta
-            int viewportDeltaX = newTopLeftCol - topLeftCol;
-            int viewportDeltaY = newTopLeftRow - topLeftRow;
-            int newWorldX = _player.X + viewportDeltaX;
-            int newWorldY = _player.Y + viewportDeltaY;
-            
-            // Handle map wrapping for collision check
-            newWorldX = _map.WrapX(newWorldX);
-            newWorldY = _map.WrapY(newWorldY);
-            
-            // Check against all other players (local and remote) - snapshot to avoid collection modified during iteration
             List<PlayerNetwork> playersCopy;
             lock (_gameStateLock) { playersCopy = new List<PlayerNetwork>(_networkPlayers.Values); }
             foreach (var networkPlayer in playersCopy)
             {
                 if (networkPlayer.PlayerId == _gameSession.PlayerId)
-                    continue; // Skip self
-                
-                // Get network player world position (wrapped)
-                int npWorldX = _map.WrapX(networkPlayer.X);
-                int npWorldY = _map.WrapY(networkPlayer.Y);
-                
-                // Check if new position overlaps with this player
-                // Player occupies: [X, X+PlayerWidth-1] columns, [Y, Y+PlayerHeight-1] rows
-                if (!(newWorldX + PlayerWidth <= npWorldX || newWorldX >= npWorldX + PlayerWidth ||
-                      newWorldY + PlayerHeight <= npWorldY || newWorldY >= npWorldY + PlayerHeight))
+                    continue;
+                for (int dy = 0; dy < PlayerHeight; dy++)
+                for (int dx = 0; dx < PlayerWidth; dx++)
                 {
-                    return false; // Overlaps with another player
+                    int cx = _map.WrapX(newWorldX + dx);
+                    int cy = _map.WrapY(newWorldY + dy);
+                    for (int ody = 0; ody < PlayerHeight; ody++)
+                    for (int odx = 0; odx < PlayerWidth; odx++)
+                    {
+                        if (_map.WrapX(networkPlayer.X + odx) == cx && _map.WrapY(networkPlayer.Y + ody) == cy)
+                            return false;
+                    }
                 }
             }
         }
-        
+
         return true;
     }
 
@@ -752,16 +734,9 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         _player.X += deltaX;
         _player.Y += deltaY;
 
-        // Handle map wrapping
-        if (_player.X < 0)
-            _player.X = _map.MapWidth;
-        else if (_player.X > _map.MapWidth)
-            _player.X = 0;
-
-        if (_player.Y < 0)
-            _player.Y = _map.MapHeight;
-        else if (_player.Y > _map.MapHeight)
-            _player.Y = 0;
+        // Wrap to valid range [0, MapWidth-1] x [0, MapHeight-1] (e.g. x=-1 wraps to right edge)
+        _player.X = _map.WrapX(_player.X);
+        _player.Y = _map.WrapY(_player.Y);
 
         // Invalidate cached map since player moved
         _cachedMapViewport = null;
@@ -778,42 +753,24 @@ public class Game : Window, Terminal.Gui.App.IRunnable
         if (!IsInitialized || _introScreen.IsClearingScreen || _introScreen.IsGameOver || _introScreen.IsWaitingForGameOverKey)
             return false;
 
-        // Clean up old key presses
         CleanupOldKeyPresses();
-
-        // If no keys are pressed, don't move
         if (_pressedKeys.Count == 0)
             return false;
 
-        int currentWidth = Frame.Width;
-        int currentHeight = Frame.Height;
-        int frameWidth = currentWidth;
-        int frameHeight = currentHeight;
-
-        // Get map viewport centered on player position
-        var map = _map.GetMap(frameWidth, frameHeight, _player.X, _player.Y);
-
-        // Calculate top-left corner of player in viewport coordinates
-        int topLeftCol = frameWidth / 2;
-        int topLeftRow = frameHeight / 2;
-
-        // Calculate movement direction
         var (deltaX, deltaY) = CalculateMovementDirection();
+        if (deltaX == 0 && deltaY == 0)
+            return false;
 
-        // Try to move if there's a direction
-        if (deltaX != 0 || deltaY != 0)
+        int newWorldX = _player.X + deltaX;
+        int newWorldY = _player.Y + deltaY;
+
+        if (CanMoveToWorld(newWorldX, newWorldY))
         {
-            int newTopLeftCol = topLeftCol + deltaX;
-            int newTopLeftRow = topLeftRow + deltaY;
-
-            if (CanMoveTo(newTopLeftCol, newTopLeftRow, topLeftCol, topLeftRow, map, frameWidth, frameHeight))
-            {
-                ExecutePlayerMove(deltaX, deltaY);
-                return true; // Player moved
-            }
+            ExecutePlayerMove(deltaX, deltaY);
+            return true;
         }
 
-        return false; // Player didn't move
+        return false;
     }
 
     private void DrawMapAndPlayer()

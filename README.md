@@ -118,6 +118,7 @@ Build the solution first with `./build.sh` or `.\build.ps1` when needed (e.g. af
 - All players should use the same starting level for consistency
 - The **server** (not the host) is the game authority: it runs the simulation and broadcasts state; all clients send only input (move/fire) and render the state they receive
 - All players can move and shoot independently; bullets, snipes, hives, level, and scores are synchronized in real-time from the server
+- **Player-vs-player (PvP)**: In multiplayer, players can shoot each other. If your bullet hits another player, they die, lose a life, and respawn at a random position if they have lives left; you gain **1000 points** for the kill. All of the shot player's bullets vanish when they die.
 - When all players leave (gracefully or by disconnect), the server abandons the game and frees the room
 - If the host disconnects, the game may become unstable (host migration not yet implemented)
 
@@ -127,7 +128,7 @@ The 'Intro Screen' will change quite a bit as multi-player gaming is added
 ![Game Play](./nsnipes-game.png)
 Game play, your player remains central - as you move the map moves around you and is endlessly scrolling. i.e. if you go off the top of the map you seemlessly rejoin the bottom - the map feels massive.  Hives release snipes,  and snipes will wander around the maze, but be careful, as soon as they get a sniff of you, they'll start to home in on you.
 
-You can shoot snipes, you have bullets that can be shot in any direction and will bounce off walls too!   You can shoot hives, though it will take 3 shots to destroy a hive - hives are valuable to shoot, as you'll gain points for shooting the hive plus points for all of the un-released snipes within the hive -- shoot them quickly to gain more points!
+You can shoot snipes, you have bullets that can be shot in any direction and will bounce off walls too!   You can shoot hives, though it will take 3 shots to destroy a hive - hives are valuable to shoot, as you'll gain points for shooting the hive plus points for all of the un-released snipes within the hive -- shoot them quickly to gain more points! In **multiplayer**, you can also shoot other players: the shot player dies, loses a life, and respawns if they have lives left; you gain 1000 points per kill, and all of that player's bullets vanish.
 
 ## Architecture & industry context
 
@@ -177,6 +178,7 @@ So what's left to do:
   - ✅ Join Multiplayer Game (prompts for game ID, waits for game to start)
   - ✅ Server-authoritative simulation (server runs `NSnipes.Core.GameSimulation`; clients send input only, receive state snapshots)
   - ✅ Bullet, snipe, hive, level, and score synchronization (from server state)
+  - ✅ Player-vs-player (PvP): players can shoot each other; shot player dies, loses a life, respawns if lives left; shooter gets 1000 points; dead player's bullets vanish
   - ✅ Player visibility and hive synchronization; joining player map fix (wait for first snapshot)
   - ✅ Multiplayer game end/results screen; server abandons game when all players leave
   - ✅ Server configuration UI (configure server address/port, status display)
@@ -317,7 +319,7 @@ So what's left to do:
 
 **Game State**
 - Tracks current level (starts at 1)
-- Tracks player score (25 points per snipe killed, 500 points for hive + 25 per unreleased snipe)
+- Tracks player score (25 points per snipe killed, 500 points for hive + 25 per unreleased snipe; 1000 points per player kill in multiplayer PvP)
 - Tracks total and remaining hives
 - Tracks total and remaining snipes
 - Game state is fully reset when starting a new game
@@ -327,6 +329,7 @@ So what's left to do:
 - **Bullet-Hive Collision**: When a bullet hits a hive, the bullet stops and is removed. Hives require 3 direct hits to be destroyed
 - **Hive Destruction**: When a hive is destroyed (after 3 hits), all unreleased snipes from that hive are killed, and the player gains 500 points plus 25 points per unreleased snipe
 - **Player-Snipe Collision**: When a snipe touches the player, the snipe explodes, player loses 1 life, and player respawns at a random position
+- **Bullet-Player (PvP, multiplayer only)**: When a bullet hits another player, that player dies, loses 1 life, and respawns at a random position if they have lives left. The shooter gains **1000 points**. All bullets owned by the shot player are removed instantly.
 
 ## Controls
 
@@ -375,6 +378,7 @@ So what's left to do:
 
 ### Server-authoritative multiplayer & stability (Latest)
 - **Server-authoritative architecture**: Game logic lives in `NSnipes.Core` (Map, GameState, Player, Hive, Snipe, Bullet, `GameSimulation`). The gRPC server runs the simulation in a tick loop; clients send **input only** (move/fire) and render **state only** (snapshots from the server). Bullets, snipes, hives, level, and scores are fully synchronized from the server.
+- **Player-vs-player (PvP)**: In multiplayer, players can shoot each other. When a bullet hits another player (server-authoritative): the shot player dies, loses a life, and respawns at a random position if they have lives left; the shooter is awarded **1000 points**; all bullets owned by the shot player are removed instantly.
 - **Joining player map fix**: The joining client no longer draws the map until it has received at least one game state snapshot with its position, avoiding a broken/misaligned map and invisible walls. A "Syncing game state..." message is shown until then. The draw path also uses a single captured viewport per frame to avoid torn reads when snapshots update position mid-draw.
 - **Collection-modified crash fix**: Multiplayer could crash with "Collection was modified; enumeration operation may not execute" when the network thread updated hives/snipes/bullets/players while the UI thread was drawing them. All such updates are now under a lock, and all draw/iteration code takes a snapshot of the collection under that lock and iterates the snapshot.
 - **Server cleanup when all players leave**: When every player disconnects (gracefully or not), the server stops the game simulation and removes the room, freeing resources and avoiding errors from writing to closed streams.
@@ -721,6 +725,11 @@ So what's left to do:
 - All players see each other's movement in real-time; remote players in yellow, local in white/blue
 - Player initials, respawn positions, and positions synchronized from server state
 - Player-to-player collision (players can't overlap)
+
+**Player-vs-player (PvP)**
+- Players can shoot each other; when your bullet hits another player, they die, lose a life, and respawn at a random position if they have lives left
+- Shooter gains **1000 points** per kill
+- All bullets owned by the shot player vanish when they die
 
 **Game State Synchronization**
 - Hives, snipes, bullets, level, and scores are server-authoritative; all clients render the same state from snapshots

@@ -11,6 +11,7 @@ public class GameSimulation
     public const int MaxSnipes = 100;
     public const double BulletSpeed = 1.0;
     public const int SnipeKillScore = 25;
+    public const int PlayerKillScore = 1000;
     public const int HiveBaseScore = 500;
     public const int SnipePerHiveScore = 25;
     public const int HiveSpawnRandomizationMs = 1000;
@@ -112,19 +113,17 @@ public class GameSimulation
     private (int x, int y) FindRandomValidPosition(List<Player> excludePlayers, List<Hive> excludeHives)
     {
         const int MAX_ATTEMPTS = 1000;
-        int pw = Player.Width;
-        int ph = Player.Height;
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
         {
-            int x = Random.Shared.Next(0, _map.MapWidth - (pw - 1));
-            int y = Random.Shared.Next(0, _map.MapHeight - (ph - 1));
+            int x = Random.Shared.Next(0, _map.MapWidth);
+            int y = Random.Shared.Next(0, _map.MapHeight);
             if (IsPositionValidForPlayer(x, y, null, excludePlayers, excludeHives))
                 return (x, y);
         }
 
-        for (int y = 0; y < _map.MapHeight - 2; y++)
-            for (int x = 0; x < _map.MapWidth - 1; x++)
+        for (int y = 0; y < _map.MapHeight; y++)
+            for (int x = 0; x < _map.MapWidth; x++)
                 if (IsPositionValidForPlayer(x, y, null, excludePlayers, excludeHives))
                     return (x, y);
         return (1, 1);
@@ -135,24 +134,42 @@ public class GameSimulation
     {
         int pw = Player.Width;
         int ph = Player.Height;
-        if (x < 0 || x + (pw - 1) >= _map.MapWidth || y < 0 || y + (ph - 1) >= _map.MapHeight)
+        // Position is already wrapped from ApplyInput; allow any wrapped (x,y) in [0, MapWidth) x [0, MapHeight)
+        if (x < 0 || x >= _map.MapWidth || y < 0 || y >= _map.MapHeight)
             return false;
 
-        for (int row = y; row <= y + (ph - 1); row++)
-            for (int col = x; col <= x + (pw - 1); col++)
-                if (!_map.IsWalkable(col, row)) return false;
+        // Check walkability for each cell the player occupies, using wrapped coordinates (map wraps)
+        for (int dy = 0; dy < ph; dy++)
+            for (int dx = 0; dx < pw; dx++)
+                if (!_map.IsWalkable(_map.WrapX(x + dx), _map.WrapY(y + dy)))
+                    return false;
 
         foreach (var p in excludePlayers ?? _players)
         {
             if (p.PlayerId == excludePlayerId) continue;
-            if (x >= p.X - 1 && x <= p.X + pw && y >= p.Y - 1 && y <= p.Y + ph)
-                return false;
+            // Overlap in wrapped space: any of our cells equals any of their cells
+            for (int dy = 0; dy < ph; dy++)
+                for (int dx = 0; dx < pw; dx++)
+                {
+                    int cx = _map.WrapX(x + dx), cy = _map.WrapY(y + dy);
+                    for (int ody = 0; ody < ph; ody++)
+                        for (int odx = 0; odx < pw; odx++)
+                            if (_map.WrapX(p.X + odx) == cx && _map.WrapY(p.Y + ody) == cy)
+                                return false;
+                }
         }
         foreach (var h in excludeHives ?? _hives)
         {
             if (h.IsDestroyed) continue;
-            if (x >= h.X - 1 && x <= h.X + 2 && y >= h.Y - 1 && y <= h.Y + 2)
-                return false;
+            for (int dy = 0; dy < ph; dy++)
+                for (int dx = 0; dx < pw; dx++)
+                {
+                    int cx = _map.WrapX(x + dx), cy = _map.WrapY(y + dy);
+                    for (int hy = 0; hy <= 1; hy++)
+                        for (int hx = 0; hx <= 1; hx++)
+                            if (_map.WrapX(h.X + hx) == cx && _map.WrapY(h.Y + hy) == cy)
+                                return false;
+                }
         }
         return true;
     }
@@ -319,6 +336,56 @@ public class GameSimulation
                         break;
                     }
                 }
+
+            // Bullet hits another player (PvP): shot player dies, loses a life, respawns if lives left; shooter gets 1000; dead player's bullets vanish
+            if (!removed)
+            {
+                foreach (var player in _players)
+                {
+                    if (player.PlayerId == bullet.PlayerId) continue; // can't shoot yourself
+                    if (!player.IsAlive || player.Lives <= 0) continue;
+                    int px = _map.WrapX(player.X);
+                    int py = _map.WrapY(player.Y);
+                    bool bulletInPlayer = false;
+                    for (int dy = 0; dy < Player.Height && !bulletInPlayer; dy++)
+                    for (int dx = 0; dx < Player.Width; dx++)
+                    {
+                        if (_map.WrapX(player.X + dx) == bulletMapX && _map.WrapY(player.Y + dy) == bulletMapY)
+                        {
+                            bulletInPlayer = true;
+                            break;
+                        }
+                    }
+                    if (!bulletInPlayer) continue;
+
+                    // Shot player dies, loses a life
+                    player.Lives--;
+                    player.IsAlive = player.Lives > 0;
+                    if (player.Lives > 0)
+                    {
+                        var (rx, ry) = FindRandomValidPosition(_players, _hives);
+                        player.X = rx;
+                        player.Y = ry;
+                    }
+
+                    // Shooter gets 1000 points
+                    var shooter = _players.FirstOrDefault(p => p.PlayerId == bullet.PlayerId);
+                    if (shooter != null) shooter.Score += PlayerKillScore;
+
+                    // Remove the hitting bullet first (so index i is still valid)
+                    _bullets.RemoveAt(i);
+                    removed = true;
+
+                    // All bullets owned by the shot player vanish
+                    string? shotPlayerId = player.PlayerId;
+                    for (int k = _bullets.Count - 1; k >= 0; k--)
+                    {
+                        if (_bullets[k].PlayerId == shotPlayerId)
+                            _bullets.RemoveAt(k);
+                    }
+                    break;
+                }
+            }
         }
     }
 

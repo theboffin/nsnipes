@@ -2,7 +2,7 @@ namespace NSnipes;
 
 public class Map
 {
-    private readonly string[] _map = [
+    private static readonly string[] RawMap = [
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
 "                                                                                                                                                      ║                             ║                                                                                         ║                                                                                                         ",
@@ -19,14 +19,14 @@ public class Map
 "                              ║              ║              ║              ║                                            ║              ║              ║                                            ║              ║              ║                             ║                                            ║              ║                                                            ",
 "               ╔══════════════╝              ║              ╚══════════════╝              ╔═════════════════════════════╣              ║              ╠═════════════════════════════╦══════════════╝              ║              ║              ╔══════════════╩═════════════                 ══════════════╝              ║              ═══════════════╦═════════════════════════════ ",
 "               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
-"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
-"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
-"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
+"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
+"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
+"               ║                             ║                                            ║                             ║                             ║                             ║                             ║                             ║                                                                          ║                             ║                              ",
 "═══════════════╝              ╔══════════════╣              ╔══════════════╦══════════════╝              ║              ╚══════════════╗                                                           ╔══════════════╩═════════════════════════════╣              ══════════════════════════════════════════════              ╚══════════════╗              ╚══════════════╗               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
-"                              ║              ║              ║              ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
+"                              ║              ║              ║              ║                             ║                             ║                             ║                             ║                                            ║                                                                                         ║                             ║               ",
 "               ╔══════════════╣              ║              ║              ║              ═══════════════╬══════════════╗              ╠═════════════════════════════╬══════════════╦══════════════╝              ══════════════════════════════╝              ╔═══════════════              ╔════════════════════════════════════════════╬═══════════════              ║               ",
 "               ║              ║                             ║              ║                             ║              ║              ║                             ║              ║                                                                          ║                             ║                                            ║                             ║               ",
 "               ║              ║                             ║              ║                             ║              ║              ║                             ║              ║                                                                          ║                             ║                                            ║                             ║               ",
@@ -82,7 +82,7 @@ public class Map
 "               ║                                                           ║                             ║              ║              ║                                            ║              ║                             ║                             ║                                                                          ║              ║              ║               ",
 "               ║                                                           ║                             ║              ║              ║                                            ║              ║                             ║                             ║                                                                          ║              ║              ║               ",
 "               ║                                                           ║                             ║              ║              ║                                            ║              ║                             ║                             ║                                                                          ║              ║              ║               ",
-"               ║              ╔════════════════════════════════════════════╬═══════════════              ║              ║              ╠═════════════════════════════╦══════════════╝              ╚══════════════╣              ║              ║              ║              ║              ╔══════════════               ╔══════════════╝              ║              ║               ",
+"               ║              ╔════════════════════════════════════════════╬═══════════════              ║              ║              ╠═════════════════════════════╦══════════════╝              ╚══════════════╗              ║              ║              ║              ║              ╔══════════════               ╔══════════════╝              ║              ║               ",
 "               ║              ║                                            ║                                                           ║                             ║                                            ║                             ║                             ║              ║                             ║                             ║                              ",
 "               ║              ║                                            ║                                                           ║                             ║                                            ║                             ║                             ║              ║                             ║                             ║                              ",
 "               ║              ║                                            ║                                                           ║                             ║                                            ║                             ║                             ║              ║                             ║                             ║                              ",
@@ -129,11 +129,22 @@ public class Map
 "               ║                                                                                                                       ║                             ║                                            ║                                                                          ║                                                           ║                              "
     ];
 
+    private readonly string[] _map;
+
     public string[] FullMap => _map;
     public int MapWidth => _map[0].Length;
     public int MapHeight => _map.Length;
 
-    public Map() { }
+    public Map()
+    {
+        int width = RawMap[0].Length;
+        _map = new string[RawMap.Length];
+        for (int i = 0; i < RawMap.Length; i++)
+        {
+            string row = RawMap[i];
+            _map[i] = row.Length > width ? row.Substring(0, width) : row.PadRight(width);
+        }
+    }
 
     public int WrapX(int x) => (x % MapWidth + MapWidth) % MapWidth;
     public int WrapY(int y) => (y % MapHeight + MapHeight) % MapHeight;
@@ -150,42 +161,35 @@ public class Map
         else if (deltaY < -MapHeight / 2) deltaY += MapHeight;
     }
 
-    /// <summary>Returns true if (x,y) is within map bounds. Uses actual row length for x (rows may differ).</summary>
+    /// <summary>Returns true if (x,y) is within map bounds. All rows are normalized to MapWidth.</summary>
     public bool IsValidCoordinate(int x, int y) =>
-        y >= 0 && y < MapHeight && x >= 0 && x < FullMap[y].Length;
+        y >= 0 && y < MapHeight && x >= 0 && x < MapWidth;
 
     /// <summary>Returns true if the cell is walkable (space).</summary>
-    public bool IsWalkable(int x, int y)
-    {
-        if (!IsValidCoordinate(x, y)) return false;
-        string row = FullMap[y];
-        if (x >= row.Length) return false; // rows may be shorter than MapWidth (row 0)
-        return row[x] == ' ';
-    }
+    public bool IsWalkable(int x, int y) =>
+        IsValidCoordinate(x, y) && FullMap[y][x] == ' ';
 
     public string[] GetMap(int frameWidth, int frameHeight, int x, int y)
     {
         string[] rows = new string[frameHeight];
-        int mapRow = (y - (frameHeight / 2) + FullMap.Length) % FullMap.Length;
+        int mapRow = (y - (frameHeight / 2) + _map.Length) % _map.Length;
         int mapCol = x - (frameWidth / 2);
+        int startCol = (mapCol % MapWidth + MapWidth) % MapWidth; // same for all rows so viewport columns align
         Span<char> buffer = stackalloc char[frameWidth];
 
         for (int r = 0; r < frameHeight; r++)
         {
-            string fullRow = FullMap[mapRow];
-            int rowLength = fullRow.Length;
-            int startCol = (mapCol % rowLength + rowLength) % rowLength;
-
-            if (startCol + frameWidth <= rowLength)
+            string fullRow = _map[mapRow];
+            if (startCol + frameWidth <= MapWidth)
                 rows[r] = fullRow.AsSpan(startCol, frameWidth).ToString();
             else
             {
-                int rightPartLength = rowLength - startCol;
+                int rightPartLength = MapWidth - startCol;
                 fullRow.AsSpan(startCol, rightPartLength).CopyTo(buffer);
                 fullRow.AsSpan(0, frameWidth - rightPartLength).CopyTo(buffer[rightPartLength..]);
                 rows[r] = new string(buffer);
             }
-            mapRow = (mapRow + 1) % FullMap.Length;
+            mapRow = (mapRow + 1) % _map.Length;
         }
         return rows;
     }
